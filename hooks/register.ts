@@ -1072,6 +1072,7 @@ const FORGE_STATUS: Record<string, [string, string]> = {
 const tok = (n: number) => (!n ? '0' : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n))
 const bare = (id: string) => String(id || '').replace(/^[^/]+\//, '')
 const nice = (id: string) => forge?.labels?.[id] || bare(id)
+const FACTORY_ORDER = ['turbo', 'barato', 'equilibrado', 'calidad', 'solo-claude', 'openai', 'gemini', 'open-source']
 const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal: 'min', low: 'low', medium: 'med', high: 'high', xhigh: 'xhigh' }
 const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')
 
@@ -1213,29 +1214,41 @@ function drawForge($: any, e: any, out: any[], h: any) {
   out.push(card('forge-plug', '◢ ENTRY PLUG', live ? C.orange : C.violet, plugRows))
 
   const all = Object.entries<any>(forge.profiles || {})
-  const mine = all.filter(([, p]) => p.source !== 'zero-pi').map(([n]) => n)
+  const broken = (pr: any) => ['explore', 'plan', 'build', 'veredicto'].some((f) => /^(plus|oc)\//.test(String(pr?.[f] || pr?.models?.[f] || '')))
+  const sections: { title: string; names: string[] }[] = []
+  const factory = all.filter(([, p]) => p.source !== 'zero-pi').map(([n]) => n)
+  sections.push({ title: 'FÁBRICA', names: [...FACTORY_ORDER.filter((n) => factory.includes(n)), ...factory.filter((n) => !FACTORY_ORDER.includes(n)).sort()] })
   const zero = all.filter(([, p]) => p.source === 'zero-pi').map(([n]) => n)
-  const profileRows: any[] = [
-    Box({
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      columnGap: 1,
-      children: mine.map((n) => chip('profile-' + n, n, forge.profile === n, C.tabBg, () => void forgeCmd($, `profile ${n}`))),
-    }),
-  ]
-  if (zero.length)
+  const zgroup = (n: string) => {
+    const k = n.replace(/^zero:/, '')
+    if (/^solo-/.test(k)) return 'ZERO-PI · UN MODELO'
+    if (/economico/.test(k)) return 'ZERO-PI · ECONÓMICOS'
+    if (/adversarial|veredicto-claude-codex|revisa|review/.test(k)) return 'ZERO-PI · REVISIÓN'
+    return 'ZERO-PI · COMBINADOS'
+  }
+  for (const g of ['ZERO-PI · UN MODELO', 'ZERO-PI · ECONÓMICOS', 'ZERO-PI · REVISIÓN', 'ZERO-PI · COMBINADOS']) {
+    const names = zero.filter((n) => zgroup(n) === g).sort()
+    if (names.length) sections.push({ title: g, names })
+  }
+  const profileRows: any[] = []
+  for (const sec of sections) {
+    profileRows.push(t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]))
     profileRows.push(
-      ...drop(
-        'fzero',
-        'zero-pi',
-        zero.includes(forge.profile) ? forge.profile : '-',
-        [{ value: '-', label: `elegí uno de ${zero.length}…` }, ...zero.map((n) => ({ value: n, label: n.replace(/^zero:/, '') }))],
-        (v) => {
-          if (v !== '-') void forgeCmd($, `profile ${v}`)
-        },
-      ),
+      Box({
+        key: 'psec-' + sec.title,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: sec.names.map((n) => {
+          const bad = broken(forge.profiles[n])
+          const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/-/g, ' ') + (bad ? ' ⚠' : '')
+          return chip('profile-' + n, clip(label, w - 2), forge.profile === n, bad ? C.chipDim : C.tabBg, () => void forgeCmd($, `profile ${n}`))
+        }),
+      }),
     )
-  out.push(card('forge-profiles', `◈ PERFIL · ${String(forge.profile).replace(/^zero:/, 'zero-pi › ')}`, C.purple, profileRows))
+  }
+  const shown = String(forge.profile).replace(/^zero:/, 'zero-pi › ').replace(/personal-/, '')
+  out.push(h.scard('forge-profiles', `◈ PERFIL · ${clip(shown, w - 22)}`, C.purple, profileRows, 10))
 
   const catalog: Record<string, string[]> = forge.catalog || {}
   const levels: string[] = forge.effortLevels || ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']

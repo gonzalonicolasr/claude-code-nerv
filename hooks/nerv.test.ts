@@ -136,9 +136,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await m.press({ key: 'ddh-fgroup-plan' })
   expect(JSON.stringify(await m.drawn())).not.toContain('ddp-fgroup-plan-')
   await m.press({ key: 'fe-explore-high' })
-  await m.press({ key: 'ddh-fzero' })
-  const zeroKey = JSON.stringify(await m.drawn()).match(/"key":"(ddp-fzero-\d+)","label":"solo-gemini"/)?.[1]
-  await m.press({ key: zeroKey })
+  await m.press({ key: 'profile-zero:solo-gemini' })
   await m.press({ key: 'fcap-up' })
   await m.press({ key: 'fstop' })
   expect(sent).toEqual(['profile turbo', 'model veredicto prolite/gpt-6-luna', 'effort explore high', 'profile zero:solo-gemini', 'cap 4', 'stop'])
