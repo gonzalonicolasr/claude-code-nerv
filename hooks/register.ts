@@ -87,6 +87,7 @@ let bodyOffset = 0
 let bodyMax = 0
 let bodyTab = ''
 let lastView = 0
+let openDrop = ''
 const cardScroll: Record<string, number> = {}
 const cardMax: Record<string, number> = {}
 let cardHits: { key: string; top: number; bottom: number }[] = []
@@ -1075,8 +1076,57 @@ const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal
 const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')
 
 function drawForge($: any, e: any, out: any[], h: any) {
-  const { Box, Button, Select, Input } = $.ui.resolve(e)
+  const { Box, Button, Input } = $.ui.resolve(e)
   const { t, span, card, chip, w } = h
+  const drop = (key: string, prefix: string, value: string, options: { value: string; label: string }[], onPick: (v: string) => void, indent = 0) => {
+    const open = openDrop === key
+    const cur = options.find((o) => o.value === value)?.label ?? value
+    const head = Box({
+      key: 'dd-' + key,
+      flexDirection: 'row',
+      paddingLeft: indent,
+      children: [
+        ...(prefix ? [t([span(prefix + ' ', C.muted)])] : []),
+        Box({
+          key: 'ddb-' + key,
+          paddingX: 1,
+          backgroundColor: open ? C.tabBg : C.chipDim,
+          children: [Button({ key: 'ddh-' + key, label: `${clip(cur, w - indent - prefix.length - 6)} ${open ? '▴' : '▾'}`, plain: true, onPress: () => ((openDrop = open ? '' : key), $.ui.invalidate('ui.render')) })],
+        }),
+      ],
+    })
+    if (!open) return [head]
+    return [
+      head,
+      ...options.map((o, i) =>
+        Box({
+          key: `ddo-${key}-${i}`,
+          paddingLeft: indent + 2,
+          flexDirection: 'row',
+          children: [
+            t([span(o.value === value ? '● ' : '○ ', o.value === value ? C.lime : C.dim)]),
+            Box({
+              key: `ddob-${key}-${i}`,
+              backgroundColor: o.value === value ? C.chipDim : undefined,
+              children: [
+                Button({
+                  key: `ddp-${key}-${i}`,
+                  label: clip(o.label, w - indent - 6),
+                  plain: true,
+                  dimColor: o.value !== value,
+                  onPress: () => {
+                    openDrop = ''
+                    onPick(o.value)
+                    $.ui.invalidate('ui.render')
+                  },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ),
+    ]
+  }
   if (!forge) {
     out.push(
       card('forge-off', '⚒ FORGE', C.dim, [
@@ -1175,15 +1225,15 @@ function drawForge($: any, e: any, out: any[], h: any) {
   ]
   if (zero.length)
     profileRows.push(
-      Select({
-        key: 'fzero',
-        label: 'zero-pi',
-        options: [{ value: '-', label: zero.includes(forge.profile) ? '—' : `elegí uno de ${zero.length}…` }, ...zero.slice(0, 63).map((n) => ({ value: n, label: n.replace(/^zero:/, '') }))],
-        value: zero.includes(forge.profile) ? forge.profile : '-',
-        onSelect: (v: string) => {
+      ...drop(
+        'fzero',
+        'zero-pi',
+        zero.includes(forge.profile) ? forge.profile : '-',
+        [{ value: '-', label: `elegí uno de ${zero.length}…` }, ...zero.map((n) => ({ value: n, label: n.replace(/^zero:/, '') }))],
+        (v) => {
           if (v !== '-') void forgeCmd($, `profile ${v}`)
         },
-      }),
+      ),
     )
   out.push(card('forge-profiles', `◈ PERFIL · ${String(forge.profile).replace(/^zero:/, 'zero-pi › ')}`, C.purple, profileRows))
 
@@ -1201,34 +1251,11 @@ function drawForge($: any, e: any, out: any[], h: any) {
     const note = forge.effortNotes?.[p] || ''
     const effort = forge.efforts?.[p] || 'auto'
     modelRows.push(
-      Box({
-        key: 'mrow-' + p,
-        flexDirection: 'row',
-        columnGap: 1,
-        children: [
-          t([span(p.toUpperCase().padEnd(9), C.cyan, { bold: true })]),
-          Select({
-            key: 'fgroup-' + p,
-            options: groups.slice(0, 64),
-            value: group,
-            onSelect: (v: string) => {
-              forgeGroup[p] = v
-              $.ui.invalidate('ui.render')
-            },
-          }),
-        ],
+      ...drop('fgroup-' + p, p.toUpperCase().padEnd(9), group, groups, (v) => {
+        forgeGroup[p] = v
+        openDrop = 'fmodel-' + p
       }),
-      Box({
-        key: 'mrow2-' + p,
-        flexDirection: 'row',
-        columnGap: 1,
-        paddingLeft: 2,
-        children: [
-          ...(models.length
-            ? [Select({ key: 'fmodel-' + p, options: models, value: models.some((m) => m.value === current) ? current : undefined, onSelect: (v: string) => void forgeCmd($, `model ${p} ${v}`) })]
-            : [t([span('sin modelos', C.dim)])]),
-        ],
-      }),
+      ...(models.length ? drop('fmodel-' + p, '', current, models, (v) => void forgeCmd($, `model ${p} ${v}`), 2) : [t([span('  sin modelos', C.dim)])]),
       note
         ? t([span('  ⚡ n/a · ' + clip(note, w - 10), C.dim)])
         : Box({
