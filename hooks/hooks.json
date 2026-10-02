@@ -1,0 +1,4 @@
+{
+  "description": "nerv",
+  "modules": ["./register.ts"]
+}

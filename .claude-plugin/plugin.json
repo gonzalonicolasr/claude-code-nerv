@@ -1,0 +1,6 @@
+{
+  "name": "nerv",
+  "version": "0.1.0",
+  "description": "Barra lateral estilo Evangelion: cuota, contexto, qué hace el agente, PRs, subagentes y alertas",
+  "author": { "name": "Gonzalo Rocca" }
+}
