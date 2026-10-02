@@ -73,7 +73,9 @@ const tasks = new Map<string, { kind: string; desc: string; start: number; end?:
 const agentToUse = new Map<string, string>()
 let prs: any[] | undefined
 let prError = ''
-let ci: any = undefined
+let ghMe = ''
+let commitDays: Record<string, number> = {}
+let commitAuthor = ''
 let todos: string[] = []
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
@@ -207,12 +209,15 @@ async function refreshPRs($: any) {
   const env = await ghEnv($, cwd)
   if (!env) {
     prs = undefined
-    ci = undefined
     prError = 'sin repo de GitHub'
     return
   }
+  if (!ghMe) {
+    const me = await $.process.run(['gh', 'api', 'user', '-q', '.login'], { cwd, env, timeoutMs: 10000 }).catch(() => undefined)
+    ghMe = me?.exitCode === 0 ? me.stdout.trim() : ''
+  }
   const r = await $.process
-    .run(['gh', 'pr', 'list', '--author', '@me', '--state', 'open', '--limit', '6', '--json', 'number,title,reviewDecision,isDraft,statusCheckRollup,url'], { cwd, env, timeoutMs: 20000 })
+    .run(['gh', 'pr', 'list', '--state', 'open', '--limit', '20', '--json', 'number,title,reviewDecision,isDraft,statusCheckRollup,url,author'], { cwd, env, timeoutMs: 20000 })
     .catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
   if (r.exitCode !== 0) prError = clip((r.stderr || 'gh falló').split('\n')[0], 60)
   else
@@ -222,15 +227,6 @@ async function refreshPRs($: any) {
     } catch {
       prError = 'respuesta de gh ilegible'
     }
-  if (!branch) return
-  const runs = await $.process
-    .run(['gh', 'run', 'list', '--branch', branch, '--limit', '1', '--json', 'status,conclusion,workflowName,url,createdAt'], { cwd, env, timeoutMs: 20000 })
-    .catch(() => undefined)
-  try {
-    ci = runs?.exitCode === 0 ? JSON.parse(runs.stdout)[0] : undefined
-  } catch {
-    ci = undefined
-  }
 }
 
 async function refreshLocal($: any) {
@@ -240,6 +236,15 @@ async function refreshLocal($: any) {
   model = await $.session.model().catch(() => model)
   const b = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 }).catch(() => undefined)
   branch = b?.exitCode === 0 ? b.stdout.trim() : ''
+  const em = await $.process.run(['git', 'config', 'user.email'], { cwd, timeoutMs: 5000 }).catch(() => undefined)
+  const email = em?.exitCode === 0 ? em.stdout.trim() : ''
+  const lg = await $.process
+    .run(['git', 'log', '--all', '--since=26.weeks', '--format=%ad', '--date=short', ...(email ? ['--author=' + email] : [])], { cwd, timeoutMs: 10000 })
+    .catch(() => undefined)
+  const days: Record<string, number> = {}
+  if (lg?.exitCode === 0) for (const d of lg.stdout.split('\n')) if (d) days[d] = (days[d] || 0) + 1
+  commitDays = days
+  commitAuthor = email
   if (home && paneId) {
     const raw = await $.fs.read(`${home}/.local/state/herdr-todos.json`).catch(() => '')
     try {
@@ -440,6 +445,34 @@ const softWave = (cols: number, rows: number) => {
     const glint = front ? g1 : g2
     const base = mix(ink, hue, Math.min(1, 0.35 + top * (working ? 0.75 : 0.6)))
     return mix(base, 0xffffff, glint * top * 0.75)
+  })
+}
+
+const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+const heatColor = (n: number) => (n <= 0 ? 0x3a2d52 : n === 1 ? RGB.violet : n <= 3 ? RGB.purple : n <= 6 ? RGB.lime : n <= 10 ? RGB.orange : RGB.red)
+
+const commitStats = (weeks: number) => {
+  const today = new Date()
+  let total = 0
+  for (let i = 0; i < weeks * 7; i++) total += commitDays[dayKey(new Date(today.getTime() - i * 86400000))] || 0
+  let streak = 0
+  for (let i = commitDays[dayKey(today)] ? 0 : 1; commitDays[dayKey(new Date(today.getTime() - i * 86400000))]; i++) streak++
+  return { total, streak, today: commitDays[dayKey(today)] || 0 }
+}
+
+const heatCells = (cols: number, weeks: number) => {
+  const today = new Date()
+  const dow = today.getDay()
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.35)
+  return glyphs(cols, 7, (x, y) => {
+    if (x % 2 === 1) return undefined
+    const w = weeks - 1 - x / 2
+    const back = w * 7 + (dow - y)
+    if (w < 0 || back < 0) return undefined
+    const n = commitDays[dayKey(new Date(today.getTime() - back * 86400000))] || 0
+    const c = heatColor(n)
+    return [0x25a0, back === 0 ? mix(n ? c : RGB.purple, 0xffffff, 0.25 + 0.45 * pulse) : c]
   })
 }
 
@@ -723,6 +756,13 @@ function draw($: any, e: any) {
       act.push(t([span(blink() ? '◆ PATTERN BLUE' : '◇ PATTERN BLUE', C.orange, { bold: true }), span(` · ${patternBlue.count}× ${patternBlue.tool}`, C.orange)]))
       act.push(t([span('  ' + clip(patternBlue.text, w - 2), C.muted)]))
     }
+    if (e.surface === 'terminal' && Raster && Object.keys(commitDays).length) {
+      const weeks = Math.max(4, Math.floor((w + 1) / 2))
+      const st = commitStats(weeks)
+      act.push(t([span('▤ ', C.purple), span(`${st.total} commits`, C.text, { bold: true }), span(` · ${weeks} sem`, C.dim), span(st.streak ? `  ▲ racha ${st.streak} d` : '', C.orange), span(`  hoy ${st.today}`, st.today ? C.lime : C.dim)]))
+      act.push(Raster({ key: 'heat', columns: weeks * 2 - 1, rows: 7, cells: heatCells(weeks * 2 - 1, weeks) }))
+      act.push(t([span('frío ', C.dim), ...[0, 1, 2, 5, 8, 12].map((n) => span('■', '#' + heatColor(n).toString(16).padStart(6, '0'))), span(' caliente', C.dim)]))
+    }
     out.push(card('act', '▶ ACTIVIDAD', patternBlue ? C.orange : C.violet, act))
 
     const live = [...tasks.values()].filter((a) => !a.end || now() - a.end < 600000).slice(-6)
@@ -752,25 +792,17 @@ function draw($: any, e: any) {
         const pending = checks.some((c: any) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.status || c.state))
         const cic = !checks.length ? ['·', C.dim] : failed ? ['✖', C.red] : pending ? ['◌', C.amber] : ['●', C.lime]
         const rv = p.reviewDecision === 'APPROVED' ? ['✔', C.lime] : p.reviewDecision === 'CHANGES_REQUESTED' ? ['✎', C.red] : p.isDraft ? ['◇', C.dim] : ['◌', C.amber]
+        const who = p.author?.login && p.author.login !== ghMe ? ` @${p.author.login}` : ''
         prRows.push(
           Box({
+            key: 'prr-' + p.number,
             flexDirection: 'row',
-            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + p.number, href: p.url, label: clip(`#${p.number} ${p.title}`, w - 5) })],
+            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + p.number, href: p.url, label: clip(`#${p.number} ${p.title}${who}`, w - 5) })],
           }),
         )
       }
-    if (ci) {
-      const done = ci.status === 'completed'
-      const ok = ci.conclusion === 'success'
-      const [g, col] = !done ? [SPIN[frame % 4], C.amber] : ok ? ['●', C.lime] : ['✖', C.red]
-      prRows.push(
-        Box({
-          flexDirection: 'row',
-          children: [t([span(`${g} CI `, col)]), Link({ key: 'ci', href: ci.url, label: clip(`${ci.workflowName} · ${done ? ci.conclusion : ci.status}`, w - 6) })],
-        }),
-      )
-    }
-    out.push(card('prs', `⎇ PRs${branch ? ' · ' + clip(branch, w - 10) : ''}`, C.violet, prRows))
+    const counts = prs?.length ? ` · ${prs.length} abiertas` : ''
+    out.push(scard('prs', `⎇ PRs${counts}${branch ? ' · ' + clip(branch, w - 24) : ''}`, C.violet, prRows, 8))
 
     if (todos.length) out.push(card('todos', `□ ${todos.length} TO-DO${todos.length > 1 ? 'S' : ''}`, C.amber, todos.slice(0, 4).map((x) => t([span('□ ' + clip(x, w - 2), C.todo)]))))
     if (health.when) out.push(t([span(health.ok ? '♥ ' : '✖ ', health.ok ? C.lime : C.red), span(clip(health.text, w - 10), health.ok ? C.muted : C.red), span(' ' + health.when, C.dim)]))
