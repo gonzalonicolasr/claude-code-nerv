@@ -58,7 +58,6 @@ let errCount = 0
 let patternBlue: { tool: string; count: number; text: string } | undefined
 const failedCmds = new Set<string>()
 let confettiUntil = 0
-let confettiSeed = 0
 const tasks = new Map<string, { kind: string; desc: string; start: number; end?: number; status?: string }>()
 const agentToUse = new Map<string, string>()
 let prs: any[] | undefined
@@ -316,32 +315,55 @@ const cells = (cols: number, rows: number, paint: (x: number, y: number) => numb
   return (new Uint8Array(words.buffer) as any).toBase64()
 }
 
-const rand = (n: number) => {
-  const x = Math.sin(n * 12.9898 + confettiSeed) * 43758.5453
-  return x - Math.floor(x)
+const TRAIL = [0x28ff, 0x28f7, 0x28f6, 0x2876, 0x2836, 0x2816, 0x2806, 0x2804]
+
+const glyphs = (cols: number, rows: number, paint: (x: number, y: number) => [number, number] | undefined) => {
+  const words = new Uint32Array(cols * rows * 3)
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < cols; x++) {
+      const i = (y * cols + x) * 3
+      const g = paint(x, y)
+      words[i] = g ? g[0] : 0x20
+      words[i + 1] = g ? g[1] : RGB.none
+      words[i + 2] = RGB.none
+    }
+  return (new Uint8Array(words.buffer) as any).toBase64()
 }
 
-const waveCells = (cols: number, rows: number) => {
-  const h = rows * 2
-  const alert = battery()
-  const blue = !!patternBlue
-  const speed = working ? 0.45 : 0.12
+const hash = (x: number, y: number, k: number) => {
+  const v = Math.sin(x * 127.1 + y * 311.7 + k * 74.7) * 43758.5453
+  return v - Math.floor(v)
+}
+
+const ramp = (stops: number[], v: number) => {
+  const p = Math.max(0, Math.min(0.9999, v)) * (stops.length - 1)
+  const i = Math.floor(p)
+  return mix(stops[i], stops[i + 1], p - i)
+}
+
+const PALETTES = {
+  eva: [0x2a1f3d, 0x4a2d80, 0x7b3fb8, RGB.purple, 0xc4a5ff, RGB.lime, 0xeaffc2],
+  alert: [0x2a0f16, 0x6e1420, 0xb4202f, RGB.red, RGB.pink, 0xffb3c4, 0xffffff],
+  blue: [0x2a1a0c, 0x6b3410, 0xb4561a, RGB.orange, RGB.amber, 0xffe08a, 0xffffff],
+}
+const DOT = [0x00b7, 0x25aa]
+
+const particleCells = (cols: number, rows: number) => {
+  const t = frame * (working ? 0.18 : 0.05)
+  const stops = battery() ? PALETTES.alert : patternBlue ? PALETTES.blue : PALETTES.eva
   const party = now() < confettiUntil
-  return cells(cols, rows, (x, y) => {
-    if (party) {
-      for (let k = 0; k < 22; k++) {
-        const px = Math.floor(rand(k) * cols)
-        const py = Math.floor((rand(k + 99) * h + frame * (0.5 + rand(k + 7))) % h)
-        if (px === x && py === y) return [RGB.lime, RGB.pink, RGB.cyan, RGB.amber, RGB.purple][k % 5]
-      }
-      return RGB.none
+  const sweep = ((frame * (working ? 0.9 : 0.25)) % (cols + 24)) - 12
+  return glyphs(cols, rows, (x, y) => {
+    let v = 0.42 + 0.17 * Math.sin(x * 0.19 + t) + 0.13 * Math.sin(y * 1.3 - t * 0.9 + x * 0.05) + 0.1 * Math.sin((x + y * 4) * 0.11 - t * 1.4)
+    v += (working ? 0.55 : 0.3) * Math.exp(-(((x - sweep) / 5) ** 2))
+    v += (hash(x, y, Math.floor(frame / 4)) - 0.5) * 0.18
+    if (party) v = 0.55 + hash(x, y, frame) * 0.45
+    v = Math.max(0, Math.min(1, v))
+    if (hash(x, y, Math.floor(frame / 3) + 7) > (party ? 0.8 : 0.992)) {
+      const hue = party ? [RGB.lime, RGB.pink, RGB.cyan, RGB.amber, 0xffffff][Math.floor(hash(y, x, frame) * 5)] : 0xffffff
+      return [0x25aa, hue]
     }
-    const amp = (h - 1) / 2
-    const w1 = amp + Math.sin(x * 0.32 + frame * speed) * amp * 0.9
-    const w2 = amp + Math.sin(x * 0.19 - frame * speed * 0.7 + 1.3) * amp * 0.7
-    if (Math.abs(y - w1) < 0.6) return alert ? (blink() ? RGB.red : RGB.pink) : blue ? RGB.orange : RGB.lime
-    if (Math.abs(y - w2) < 0.6) return alert ? RGB.amber : RGB.purple
-    return RGB.none
+    return [DOT[v < 0.22 ? 0 : 1], ramp(stops, v)]
   })
 }
 
@@ -360,7 +382,7 @@ const sparkCells = (cols: number, rows: number) => {
   })
 }
 
-const SCAN_W = 16
+const SCAN_W = 18
 const VERBS: Record<string, string[]> = {
   thinking: ['Sincronizando', 'Consultando a MAGI', 'Analizando patrón', 'Calculando'],
   requesting: ['Conectando cable umbilical', 'Enlazando con MAGI'],
@@ -387,15 +409,12 @@ const scanCells = (mode: string) => {
   const head = pos <= span ? pos : span * 2 - pos
   const dir = pos <= span ? 1 : -1
   const hue = SCAN_COLOR[mode] || RGB.purple
-  return cells(SCAN_W, 1, (x, y) => {
+  return glyphs(SCAN_W, 1, (x) => {
     const behind = (head - x) * dir
-    if (x === head) return y === 0 ? 0xffffff : hue
-    if (behind > 0 && behind < 7) {
-      const k = behind / 7
-      const c = mix(hue, RGB.deep, k)
-      return y === 0 ? c : mix(c, RGB.deep, 0.35)
-    }
-    return RGB.none
+    if (x === head) return [0x28ff, 0xffffff]
+    if (behind > 0 && behind < TRAIL.length) return [TRAIL[behind], mix(hue, 0x1c1526, behind / TRAIL.length)]
+    if (hash(x, 0, Math.floor(frame / 2)) > 0.8) return [0x2802, 0x4b2a7a]
+    return undefined
   })
 }
 
@@ -419,7 +438,7 @@ function draw($: any, e: any) {
       span(working ? `${SPIN[frame % 4]} OPERANDO` : '◎ EN ESPERA', working ? C.lime : C.muted, { bold: working }),
     ]),
   )
-  if (e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 4, cells: waveCells(cols, 4) }))
+  if (e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 4, cells: particleCells(cols, 4) }))
   out.push(
     Box({
       flexDirection: 'row',
@@ -689,7 +708,7 @@ export function register(on: any) {
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
-      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 8 === 0) $.ui.invalidate('ui.render')
+      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     })
     $.clock.every(20000, () => {
       if (!quiet) refreshLocal($)
@@ -856,7 +875,6 @@ export function register(on: any) {
       if (r?.isError) failedCmds.add(key)
       else if (failedCmds.delete(key)) {
         confettiUntil = now() + 2500
-        confettiSeed = Math.random() * 1000
       }
     }
     $.ui.invalidate('ui.render')
