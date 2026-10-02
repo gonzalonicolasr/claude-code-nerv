@@ -74,7 +74,7 @@ Si tenés varios mods, separalos con `:`.
 | `/nerv quiet` | La esconde y apaga las animaciones (para grabar o compartir pantalla) |
 | `/nerv magi` · `git` · `hw` · `equipo` · `forge` | Va a esa pestaña |
 | `/nerv tema eva01\|eva00\|eva02\|eva08\|mark06` | Cambia los colores de todo el panel |
-| `/nerv prs` | Refresca las PRs y el CI |
+| `/nerv prs` | Refresca las PRs |
 | `/nerv debug` | Muestra el estado interno |
 
 Con la barra enfocada, las teclas `1` a `5` cambian de pestaña. Todo lo que se ve como botón se
