@@ -1,29 +1,38 @@
 const PANE = 'nerv'
-const C = {
-  purple: '#8b5cf6',
-  violet: '#7b3fb8',
-  lime: '#a3e635',
-  amber: '#f59e0b',
-  orange: '#ff7a1a',
-  red: '#ef4444',
-  pink: '#ff4d6d',
-  cyan: '#22d3ee',
-  text: '#ece2fb',
-  muted: '#8a73ad',
-  dim: '#5b4a75',
-  todo: '#f0c987',
+const THEMES = {
+  eva01: { label: 'EVA-01', purple: '#8b5cf6', violet: '#7b3fb8', lime: '#a3e635', amber: '#f59e0b', orange: '#ff7a1a', red: '#ef4444', pink: '#ff4d6d', cyan: '#22d3ee', text: '#ece2fb', muted: '#8a73ad', dim: '#5b4a75', todo: '#f0c987', ink: '#140c22', deep: '#2e2340', chip: '#241a33', chipDim: '#1c1529', tabBg: '#3a2560', trail: '#1c1526', spark: '#4b2a7a' },
+  eva00: { label: 'EVA-00', purple: '#3b82f6', violet: '#60a5fa', lime: '#facc15', amber: '#f59e0b', orange: '#fb923c', red: '#ef4444', pink: '#ff4d6d', cyan: '#7dd3fc', text: '#e5e7eb', muted: '#8b9bb4', dim: '#475569', todo: '#fde68a', ink: '#0b1220', deep: '#1e2a44', chip: '#16213a', chipDim: '#111a2e', tabBg: '#1d3a70', trail: '#101828', spark: '#1e40af' },
+  eva02: { label: 'EVA-02', purple: '#ef4444', violet: '#dc2626', lime: '#fbbf24', amber: '#f59e0b', orange: '#f97316', red: '#ef4444', pink: '#ff4d6d', cyan: '#fdba74', text: '#fde8e1', muted: '#b0857a', dim: '#6b3b33', todo: '#fcd34d', ink: '#1a0a08', deep: '#3a1a14', chip: '#2c1410', chipDim: '#22100c', tabBg: '#5a1a14', trail: '#1f0d0a', spark: '#7f1d1d' },
+  eva08: { label: 'EVA-08', purple: '#ec4899', violet: '#f472b6', lime: '#22c55e', amber: '#f59e0b', orange: '#fb923c', red: '#ef4444', pink: '#ff4d6d', cyan: '#4ade80', text: '#fce7f3', muted: '#b47e9e', dim: '#6b3a5a', todo: '#f9a8d4', ink: '#1a0a14', deep: '#3a1430', chip: '#2c1224', chipDim: '#220e1c', tabBg: '#5c1846', trail: '#1f0b18', spark: '#86198f' },
+  mark06: { label: 'MK.06', purple: '#3b82f6', violet: '#1e3a8a', lime: '#cbd5e1', amber: '#f59e0b', orange: '#94a3b8', red: '#ef4444', pink: '#ff4d6d', cyan: '#93c5fd', text: '#e2e8f0', muted: '#94a3b8', dim: '#475569', todo: '#e2e8f0', ink: '#0a0f1e', deep: '#1e293b', chip: '#172036', chipDim: '#111827', tabBg: '#1e3a8a', trail: '#0f172a', spark: '#1e3a8a' },
 }
-const RGB = {
-  purple: 0x8b5cf6,
-  violet: 0x7b3fb8,
-  lime: 0xa3e635,
-  orange: 0xff7a1a,
-  red: 0xef4444,
-  pink: 0xff4d6d,
-  amber: 0xf59e0b,
-  cyan: 0x22d3ee,
-  deep: 0x2e2340,
+type ThemeId = keyof typeof THEMES
+const THEME_IDS = Object.keys(THEMES) as ThemeId[]
+const int = (h: string) => parseInt(h.slice(1), 16)
+const rgbOf = (t: (typeof THEMES)[ThemeId]) => ({
+  purple: int(t.purple),
+  violet: int(t.violet),
+  lime: int(t.lime),
+  orange: int(t.orange),
+  red: int(t.red),
+  pink: int(t.pink),
+  amber: int(t.amber),
+  cyan: int(t.cyan),
+  deep: int(t.deep),
+  ink: int(t.ink),
+  trail: int(t.trail),
+  spark: int(t.spark),
   none: 0x01000000,
+})
+let themeId: ThemeId = 'eva01'
+let C = { ...THEMES.eva01 }
+let RGB = rgbOf(THEMES.eva01)
+const applyTheme = (id: string) => {
+  if (!THEME_IDS.includes(id as ThemeId)) return false
+  themeId = id as ThemeId
+  C = { ...THEMES[themeId] }
+  RGB = rgbOf(THEMES[themeId])
+  return true
 }
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const LONG_TURN_MS = 180000
@@ -32,7 +41,9 @@ const TABS = [
   { id: 'magi', label: 'MAGI', hotkey: '1' },
   { id: 'hw', label: 'HARDWARE', hotkey: '2' },
   { id: 'crew', label: 'EQUIPO', hotkey: '3' },
+  { id: 'forge', label: 'FORGE', hotkey: '4' },
 ]
+const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
 
 let quiet = false
@@ -72,7 +83,23 @@ const cpuHist: number[] = []
 const gpuHist: number[] = []
 let crew: any[] = []
 let crewBusy = false
+let bodyOffset = 0
+let bodyMax = 0
+let bodyTab = ''
+let lastView = 0
+const cardScroll: Record<string, number> = {}
+const cardMax: Record<string, number> = {}
+let cardHits: { key: string; top: number; bottom: number }[] = []
+let lastContent = 0
 let ramTotal = ''
+let effort: string | number | undefined
+let settingsEffort = ''
+let effortFrom = 0
+let effortAt = 0
+let forge: any = undefined
+let forgeMissing = false
+let forgeDraft = ''
+const forgeGroup: Record<string, string> = {}
 
 const now = () => Date.now()
 const base = (p: string) => (p || '').split('/').filter(Boolean).at(-1) || p
@@ -130,6 +157,35 @@ const remaining = () => {
   const rate = (p - first.pct) / ((now() - first.t) / 60000)
   if (rate <= 0) return undefined
   return ((100 - p) / rate) * 60000
+}
+
+const EFFORTS = [
+  { id: 'low', name: 'LOW', get hue() { return RGB.cyan } },
+  { id: 'medium', name: 'MEDIUM', get hue() { return RGB.lime } },
+  { id: 'high', name: 'HIGH', get hue() { return RGB.amber } },
+  { id: 'xhigh', name: 'XHIGH', get hue() { return RGB.orange } },
+  { id: 'max', name: 'MAX', get hue() { return RGB.red } },
+]
+
+const effortLevel = (v = effort) => {
+  if (typeof v === 'number') return Math.max(1, Math.min(5, Math.round(Math.log2(Math.max(1024, v) / 1024)) + 1))
+  return EFFORTS.findIndex((x) => x.id === v) + 1
+}
+
+const effortName = () => (typeof effort === 'number' ? `${Math.round(effort / 1000)}K` : EFFORTS[effortLevel() - 1]?.name || '–')
+
+const hex = (n: number) => '#' + n.toString(16).padStart(6, '0')
+
+const setEffort = (v: string | number | undefined) => {
+  if (v === undefined || v === effort) return
+  effortFrom = effortShown()
+  effortAt = now()
+  effort = v
+}
+
+const effortShown = () => {
+  const k = Math.min(1, (now() - effortAt) / 1100)
+  return effortFrom + (effortLevel() - effortFrom) * (1 - (1 - k) ** 3)
 }
 
 const battery = () => (usage?.context?.percent ?? 0) >= BATTERY_AT || (pct('five_hour') ?? 0) >= BATTERY_AT
@@ -190,6 +246,12 @@ async function refreshLocal($: any) {
     } catch {
       todos = []
     }
+  }
+  const st: any = await $.settings.read().catch(() => undefined)
+  const se = String(st?.effortLevel || '')
+  if (se && se !== settingsEffort) {
+    settingsEffort = se
+    setEffort(se)
   }
   if (home) {
     const log = await $.fs.read(`${home}/.local/state/claude-healthcheck.log`).catch(() => '')
@@ -306,6 +368,10 @@ const cells = (cols: number, rows: number, paint: (x: number, y: number) => numb
         words[i] = 0x20
         words[i + 1] = RGB.none
         words[i + 2] = RGB.none
+      } else if (top === RGB.none) {
+        words[i] = 0x2584
+        words[i + 1] = bot
+        words[i + 2] = RGB.none
       } else {
         words[i] = 0x2580
         words[i + 1] = top
@@ -341,29 +407,37 @@ const ramp = (stops: number[], v: number) => {
   return mix(stops[i], stops[i + 1], p - i)
 }
 
-const PALETTES = {
-  eva: [0x2a1f3d, 0x4a2d80, 0x7b3fb8, RGB.purple, 0xc4a5ff, RGB.lime, 0xeaffc2],
-  alert: [0x2a0f16, 0x6e1420, 0xb4202f, RGB.red, RGB.pink, 0xffb3c4, 0xffffff],
-  blue: [0x2a1a0c, 0x6b3410, 0xb4561a, RGB.orange, RGB.amber, 0xffe08a, 0xffffff],
-}
-const DOT = [0x00b7, 0x25aa]
 
-const particleCells = (cols: number, rows: number) => {
-  const t = frame * (working ? 0.18 : 0.05)
-  const stops = battery() ? PALETTES.alert : patternBlue ? PALETTES.blue : PALETTES.eva
+const WAVES = {
+  get eva() { return [RGB.lime, RGB.purple] },
+  get alert() { return [RGB.pink, RGB.red] },
+  get blue() { return [RGB.amber, RGB.orange] },
+}
+
+const softWave = (cols: number, rows: number) => {
+  const h = rows * 2
+  const t = frame * (working ? 0.2 : 0.06)
+  const [hi, lo] = battery() ? WAVES.alert : patternBlue ? WAVES.blue : WAVES.eva
   const party = now() < confettiUntil
-  const sweep = ((frame * (working ? 0.9 : 0.25)) % (cols + 24)) - 12
-  return glyphs(cols, rows, (x, y) => {
-    let v = 0.42 + 0.17 * Math.sin(x * 0.19 + t) + 0.13 * Math.sin(y * 1.3 - t * 0.9 + x * 0.05) + 0.1 * Math.sin((x + y * 4) * 0.11 - t * 1.4)
-    v += (working ? 0.55 : 0.3) * Math.exp(-(((x - sweep) / 5) ** 2))
-    v += (hash(x, y, Math.floor(frame / 4)) - 0.5) * 0.18
-    if (party) v = 0.55 + hash(x, y, frame) * 0.45
-    v = Math.max(0, Math.min(1, v))
-    if (hash(x, y, Math.floor(frame / 3) + 7) > (party ? 0.8 : 0.992)) {
-      const hue = party ? [RGB.lime, RGB.pink, RGB.cyan, RGB.amber, 0xffffff][Math.floor(hash(y, x, frame) * 5)] : 0xffffff
-      return [0x25aa, hue]
-    }
-    return [DOT[v < 0.22 ? 0 : 1], ramp(stops, v)]
+  const amp = (h - 1) / 2
+  const glintA = (frame * (working ? 0.9 : 0.35)) % (cols + 16) - 8
+  const glintB = cols - ((frame * (working ? 0.7 : 0.25)) % (cols + 16) - 8)
+  const ink = RGB.ink
+  return cells(cols, rows, (x, y) => {
+    if (party && hash(x, y, frame) > 0.9) return [RGB.lime, RGB.pink, RGB.cyan, RGB.amber][Math.floor(hash(y, x, frame) * 4)]
+    const w1 = amp + Math.sin(x * 0.2 + t) * amp * 0.85
+    const w2 = amp + Math.sin(x * 0.13 - t * 0.7 + 1.3) * amp * 0.65
+    const i1 = Math.exp(-((y - w1) ** 2) / 0.45)
+    const i2 = Math.exp(-((y - w2) ** 2) / 0.45)
+    const g1 = Math.exp(-(((x - glintA) / 2.5) ** 2))
+    const g2 = Math.exp(-(((x - glintB) / 2.5) ** 2))
+    const top = Math.max(i1, i2)
+    if (top < 0.12) return RGB.none
+    const front = i1 >= i2
+    const hue = front ? hi : lo
+    const glint = front ? g1 : g2
+    const base = mix(ink, hue, Math.min(1, 0.35 + top * (working ? 0.75 : 0.6)))
+    return mix(base, 0xffffff, glint * top * 0.75)
   })
 }
 
@@ -391,11 +465,11 @@ const VERBS: Record<string, string[]> = {
   'tool-use': ['Desplegando', 'Ejecutando operación'],
 }
 const SCAN_COLOR: Record<string, number> = {
-  thinking: RGB.purple,
-  requesting: RGB.amber,
-  responding: RGB.cyan,
-  'tool-input': RGB.lime,
-  'tool-use': RGB.lime,
+  get thinking() { return RGB.purple },
+  get requesting() { return RGB.amber },
+  get responding() { return RGB.cyan },
+  get 'tool-input'() { return RGB.lime },
+  get 'tool-use'() { return RGB.lime },
 }
 
 const mix = (a: number, b: number, k: number) => {
@@ -412,54 +486,193 @@ const scanCells = (mode: string) => {
   return glyphs(SCAN_W, 1, (x) => {
     const behind = (head - x) * dir
     if (x === head) return [0x28ff, 0xffffff]
-    if (behind > 0 && behind < TRAIL.length) return [TRAIL[behind], mix(hue, 0x1c1526, behind / TRAIL.length)]
-    if (hash(x, 0, Math.floor(frame / 2)) > 0.8) return [0x2802, 0x4b2a7a]
+    if (behind > 0 && behind < TRAIL.length) return [TRAIL[behind], mix(hue, RGB.trail, behind / TRAIL.length)]
+    if (hash(x, 0, Math.floor(frame / 2)) > 0.8) return [0x2802, RGB.spark]
     return undefined
   })
 }
 
+const effortGeom = (cols: number) => {
+  const segW = Math.max(3, Math.floor((cols - 4 - 4) / 5))
+  return { segW, step: segW + 1 }
+}
+
+const effortCells = (cols: number) => {
+  const lvl = effortLevel()
+  const shown = effortShown()
+  const { segW, step } = effortGeom(cols)
+  const charging = now() - effortAt < 1100
+  return cells(cols, 2, (x, py) => {
+    const sx = x - (3 - py)
+    if (sx < 0) return RGB.none
+    const seg = Math.floor(sx / step)
+    const inner = sx % step
+    if (seg > 4 || inner >= segW) return RGB.none
+    const hue = EFFORTS[seg].hue
+    const fillK = Math.max(0, Math.min(1, shown - seg))
+    const lit = inner < fillK * segW
+    const edge = py === 0 || py === 3 || inner === 0 || inner === segW - 1
+    if (!lit) return edge ? mix(hue, RGB.ink, 0.72) : RGB.none
+    if (lvl === 5 && seg === 4) return (sx + py + Math.floor(frame / 2)) % 4 < 2 ? RGB.red : 0x3a0a10
+    let col = mix(mix(hue, RGB.ink, 0.25), hue, inner / Math.max(1, segW - 1))
+    if (py === 0) col = mix(col, 0xffffff, 0.35)
+    if (py === 3) col = mix(col, RGB.ink, 0.35)
+    if (seg === lvl - 1) {
+      const pulse = 0.5 + 0.5 * Math.sin(frame * (working ? 0.5 : 0.22))
+      const sweep = (frame * (working ? 0.8 : 0.35)) % (segW + 6) - 3
+      col = mix(col, 0xffffff, 0.15 * pulse + 0.55 * Math.exp(-(((inner - sweep) / 1.6) ** 2)))
+    }
+    if (charging && Math.abs(inner - fillK * segW) < 1.5) col = mix(col, 0xffffff, 0.7)
+    return col
+  })
+}
+
+const effortLabels = (cols: number) => {
+  const { step } = effortGeom(cols)
+  const short = ['LOW', 'MED', 'HIGH', 'XHIGH', 'MAX']
+  return short.map((n, i) => ({ text: (i === 0 ? '   ' : '') + n.padEnd(i === 4 ? 0 : step).slice(0, i === 4 ? 6 : step), seg: i }))
+}
+
 function draw($: any, e: any) {
   const { Box, Text, Raster, Button, Link } = $.ui.resolve(e)
-  const cols = Math.max(20, e.props.bodyColumns || 40)
+  const dock = e.props.placement === 'dock' && (e.props.scroll?.bodyRows || 0) > 0
+  for (const k of Object.keys(cardMax)) delete cardMax[k]
+  const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
   const w = cols - 4
   const t = (children: any[], color = C.text, extra: any = {}) => Text({ wrap: 'truncate', color, children, ...extra })
   const span = (s: string, color: string, extra: any = {}) => Text({ color, children: [s], ...extra })
   const card = (key: string, title: string, color: string, rows: any[]) =>
     Box({ key, flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, children: [t([span(title, color, { bold: true })], color), ...rows] })
   const kv = (left: any[], right: any[]) => Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t(left), t(right)] })
+  const scard = (key: string, title: string, color: string, rows: any[], max: number) => {
+    const content = measure(rows, w)
+    if (!dock || content <= max) return card(key, title, color, rows)
+    const cmax = content - max
+    const off = Math.max(0, Math.min(cardScroll[key] || 0, cmax))
+    cardScroll[key] = off
+    cardMax[key] = cmax
+    const thumb = Math.max(1, Math.round((max * max) / content))
+    const at = Math.round(((max - thumb) * off) / cmax)
+    const rail: any[] = []
+    for (let i = 0; i < max; i++) rail.push(Text({ color: i >= at && i < at + thumb ? color : C.dim, children: [i >= at && i < at + thumb ? '┃' : '│'] }))
+    return Box({
+      key,
+      flexDirection: 'column',
+      borderStyle: 'round',
+      borderColor: color,
+      paddingLeft: 1,
+      children: [
+        t([span(title, color, { bold: true }), span(`  ↕ ${off + 1}-${off + max}/${content}`, C.dim)], color),
+        Box({
+          key: key + '-win',
+          flexDirection: 'row',
+          height: max,
+          overflow: 'hidden',
+          children: [
+            Box({ key: key + '-clip', flexDirection: 'column', flexGrow: 1, overflow: 'hidden', children: [Box({ key: key + '-in', flexDirection: 'column', flexShrink: 0, marginTop: -off, children: rows })] }),
+            Box({ key: key + '-rail', flexDirection: 'column', width: 1, children: rail }),
+          ],
+        }),
+      ],
+    })
+  }
+  const chip = (key: string, label: string, active: boolean, bg: string, onPress: () => void) =>
+    Box({ key: 'box-' + key, paddingX: 1, backgroundColor: active ? bg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active, onPress })] })
 
   const out: any[] = []
   const alert = battery()
+  const ink = C.ink
   out.push(
-    t([
-      span('NERV ', alert && blink() ? C.red : C.purple, { bold: true }),
-      span('ネルフ', C.orange),
-      span(' ▸ MAGI ', C.muted),
-      span(working ? `${SPIN[frame % 4]} OPERANDO` : '◎ EN ESPERA', working ? C.lime : C.muted, { bold: working }),
-    ]),
+    Box({
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginRight: 2,
+      children: [
+        t([
+          span(' NERV ', ink, { bold: true, backgroundColor: alert && blink() ? C.red : C.purple }),
+          span(' ネルフ', C.orange, { bold: true }),
+          span(' ⟋ MAGI', C.dim),
+        ]),
+        t([
+          working
+            ? span(` ${SPIN[frame % 4]} OPERANDO `, ink, { bold: true, backgroundColor: C.lime })
+            : span(' ◎ EN ESPERA ', C.muted, { backgroundColor: C.chip }),
+        ]),
+      ],
+    }),
   )
-  if (e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 4, cells: particleCells(cols, 4) }))
+  if (e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 3, cells: softWave(cols, 3) }))
+  const magi = ['MELCHIOR·1', 'BALTHASAR·2', 'CASPER·3']
+  const vote = (i: number) => {
+    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: ink, bg: blink() ? C.red : C.pink }
+    if (working && Math.floor(frame / 3) % 3 === i) return { word: '審議', fg: ink, bg: C.lime }
+    if (working) return { word: '待機', fg: C.purple, bg: C.chip }
+    return { word: '承認', fg: C.muted, bg: C.chipDim }
+  }
   out.push(
     Box({
       flexDirection: 'row',
       columnGap: 1,
+      children: magi.map((name, i) => {
+        const v = vote(i)
+        const cw = Math.floor((cols - 2) / 3)
+        return Box({
+          key: 'magi-' + i,
+          width: cw,
+          flexDirection: 'column',
+          alignItems: 'center',
+          backgroundColor: v.bg,
+          children: [t([span(clip(name, cw), v.fg, { bold: v.bg === C.lime })], v.fg), t([span(v.word, v.fg, { bold: true })], v.fg)],
+        })
+      }),
+    }),
+  )
+  const tabLabel = (x: (typeof TABS)[number]) => (tab === x.id ? `◆ ${x.label}` : x.label)
+  out.push(
+    Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      marginTop: 1,
       children: TABS.map((x) =>
-        Button({
-          key: 'tab-' + x.id,
-          label: tab === x.id ? `▣ ${x.label}` : `□ ${x.label}`,
-          hotkey: x.hotkey,
-          plain: true,
-          dimColor: tab !== x.id,
-          onPress: () => {
-            tab = x.id
-            if (x.id === 'hw') refreshHw($)
-            if (x.id === 'crew') refreshCrew($)
-            $.ui.invalidate('ui.render')
-          },
+        Box({
+          key: 'tabbox-' + x.id,
+          paddingX: tab === x.id ? 1 : 0,
+          backgroundColor: tab === x.id ? C.tabBg : undefined,
+          children: [
+            Button({
+              key: 'tab-' + x.id,
+              label: tabLabel(x),
+              hotkey: x.hotkey,
+              plain: true,
+              dimColor: tab !== x.id,
+              onPress: () => {
+                tab = x.id
+                $.store.set('tab', tab).catch(() => undefined)
+                if (x.id === 'hw') refreshHw($)
+                if (x.id === 'crew') refreshCrew($)
+                if (x.id === 'forge') refreshForge($)
+                $.ui.invalidate('ui.render')
+              },
+            }),
+          ],
         }),
       ),
     }),
   )
+  let used = 0
+  const ruleParts: any[] = []
+  for (const x of TABS) {
+    const n = tabLabel(x).length + 3 + (tab === x.id ? 2 : 0) + 1
+    ruleParts.push(span((tab === x.id ? '━' : '─').repeat(n - 1), tab === x.id ? C.purple : C.dim), span('─', C.dim))
+    used += n
+  }
+  ruleParts.push(span('─'.repeat(Math.max(0, cols - used)), C.dim))
+  out.push(t(ruleParts))
+  const headN = out.length
+  if (tab !== bodyTab) {
+    bodyTab = tab
+    bodyOffset = 0
+  }
 
   if (tab === 'magi') {
     if (recap)
@@ -592,7 +805,20 @@ function draw($: any, e: any) {
         ],
       }),
     )
+    out.push(
+      Box({
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: [
+          t([span('◈ UNIDAD', C.muted, { bold: true })]),
+          ...THEME_IDS.map((id) => chip('theme-' + id, THEMES[id].label, themeId === id, THEMES[id].tabBg, () => void setTheme($, id))),
+        ],
+      }),
+    )
   }
+
+  if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
 
   if (tab === 'hw') {
     if (!hw) out.push(t([span('leyendo sensores…', C.muted)]))
@@ -672,10 +898,410 @@ function draw($: any, e: any) {
         ],
       })
     })
-    out.push(card('crew', '◈ EQUIPO NERV', C.purple, rows.length ? rows : [t([span('herdr no responde', C.muted)])]))
+    out.push(scard('crew', '◈ EQUIPO NERV', C.purple, rows.length ? rows : [t([span('herdr no responde', C.muted)])], 14))
   }
 
-  return Box({ flexDirection: 'column', children: out })
+  const lvl = effortLevel()
+  const hue = hex(EFFORTS[lvl - 1]?.hue ?? RGB.purple)
+  const hot = lvl === 5 && blink()
+  const foot: any[] = [
+    t([span('─'.repeat(cols), C.dim)]),
+    Box({
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      children: [
+        t([
+          span(hot ? '◈ ' : '◆ ', hue),
+          span('EFFORT ', C.muted, { bold: true }),
+          lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hot ? C.pink : hue }) : span('sin dato', C.dim),
+        ]),
+        t([span(lvl ? '▰'.repeat(lvl) : '', hue), span('▱'.repeat(5 - lvl), C.dim), span(lvl === 5 ? ' OVERDRIVE' : ` ${lvl}/5`, lvl === 5 ? hue : C.dim, { bold: lvl === 5 })]),
+      ],
+    }),
+  ]
+  if (e.surface === 'terminal' && Raster) {
+    foot.push(Raster({ key: 'effort', columns: cols, rows: 2, cells: effortCells(cols) }))
+    foot.push(t(effortLabels(cols).map((l) => span(l.text, l.seg === lvl - 1 ? hex(EFFORTS[l.seg].hue) : C.dim, { bold: l.seg === lvl - 1 }))))
+  }
+  const rows = e.props.scroll?.bodyRows || 0
+  const footBox = Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot })
+  if (!rows || e.props.placement !== 'dock') {
+    return Box({ flexDirection: 'column', minHeight: rows || undefined, children: [...out, Box({ key: 'spacer', flexGrow: 1 }), footBox] })
+  }
+  const head = out.slice(0, headN)
+  const body = out.slice(headN)
+  const view = Math.max(3, rows - measure(head, cols) - measure(footBox, cols))
+  const content = measure(body, cols)
+  cardHits = []
+  let y = measure(head, cols) - bodyOffset
+  for (const item of body) {
+    const hgt = measure(item, cols)
+    const k = item?.props?.key
+    if (k && cardMax[k] !== undefined) cardHits.push({ key: k, top: y, bottom: y + hgt })
+    y += hgt
+  }
+  lastView = view
+  lastContent = content
+  bodyMax = Math.max(0, content - view)
+  bodyOffset = Math.max(0, Math.min(bodyOffset, bodyMax))
+  const rail: any[] = []
+  if (bodyMax > 0) {
+    const thumb = Math.max(1, Math.round((view * view) / content))
+    const at = Math.round(((view - thumb) * bodyOffset) / bodyMax)
+    for (let i = 0; i < view; i++) rail.push(Text({ color: i >= at && i < at + thumb ? C.purple : C.dim, children: [i >= at && i < at + thumb ? '┃' : '│'] }))
+  }
+  return Box({
+    flexDirection: 'column',
+    height: rows,
+    children: [
+      Box({ key: 'head', flexDirection: 'column', flexShrink: 0, children: head }),
+      Box({
+        key: 'body',
+        flexDirection: 'row',
+        flexGrow: 1,
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: 'hidden',
+        children: [
+          Box({ key: 'body-clip', flexDirection: 'column', flexGrow: 1, overflow: 'hidden', children: [Box({ key: 'body-in', flexDirection: 'column', flexShrink: 0, marginTop: -bodyOffset, children: body })] }),
+          ...(rail.length ? [Box({ key: 'body-bar', flexDirection: 'column', width: 1, children: rail })] : []),
+        ],
+      }),
+      footBox,
+    ],
+  })
+}
+
+const kids = (el: any) => {
+  const c = el?.children ?? el?.props?.children
+  return Array.isArray(c) ? c.flat(Infinity) : c != null ? [c] : []
+}
+
+const textOf = (el: any): string => (typeof el === 'string' || typeof el === 'number' ? String(el) : el && typeof el === 'object' ? (el.props?.label ?? '') + kids(el).map(textOf).join('') : '')
+
+const widthOf = (el: any): number => {
+  if (!el || typeof el !== 'object') return String(el ?? '').length
+  if (el.type === 'Button') return String(el.props?.label ?? '').length + (el.props?.plain ? 0 : 4)
+  if (el.type === 'Box') {
+    const p = el.props || {}
+    const ks = kids(el)
+    const gap = p.columnGap ?? p.gap ?? 0
+    const inner = p.flexDirection === 'column' ? Math.max(0, ...ks.map(widthOf)) : ks.reduce((a: number, k: any) => a + widthOf(k), 0) + gap * Math.max(0, ks.length - 1)
+    return inner + (p.borderStyle ? 2 : 0) + 2 * (p.paddingX ?? p.padding ?? 0)
+  }
+  return textOf(el).length
+}
+
+function measure(el: any, width: number): number {
+  if (Array.isArray(el)) return el.reduce((a, x) => a + measure(x, width), 0)
+  if (!el || typeof el !== 'object') return 0
+  const p = el.props || {}
+  if (el.type === 'Raster' || el.type === 'Image') return p.rows || 1
+  if (el.type === 'Text') return p.wrap === 'wrap' ? Math.max(1, Math.ceil(textOf(el).length / Math.max(1, width))) : 1
+  if (el.type !== 'Box') return 1
+  if (p.display === 'none') return 0
+  const border = p.borderStyle ? 2 : 0
+  const padY = (p.paddingTop ?? p.paddingY ?? p.padding ?? 0) + (p.paddingBottom ?? p.paddingY ?? p.padding ?? 0)
+  const marY = (p.marginTop ?? p.marginY ?? p.margin ?? 0) + (p.marginBottom ?? p.marginY ?? p.margin ?? 0)
+  const inner = Math.max(1, width - (p.borderStyle ? 2 : 0) - 2 * (p.paddingX ?? p.padding ?? 0))
+  const ks = kids(el)
+  let h = 0
+  if (p.flexDirection === 'row' || p.flexDirection === 'row-reverse') {
+    const tallest = Math.max(1, ...ks.map((k: any) => measure(k, inner)))
+    if (p.flexWrap === 'wrap') {
+      const gap = p.columnGap ?? p.gap ?? 0
+      let lines = 1
+      let used = 0
+      for (const k of ks) {
+        const kw = widthOf(k) + (used ? gap : 0)
+        if (used && used + kw > inner) {
+          lines++
+          used = widthOf(k)
+        } else used += kw
+      }
+      h = lines * tallest + (p.rowGap ?? p.gap ?? 0) * (lines - 1)
+    } else h = tallest
+  } else {
+    h = ks.reduce((a: number, k: any) => a + measure(k, inner), 0) + (p.rowGap ?? p.gap ?? 0) * Math.max(0, ks.length - 1)
+  }
+  return h + border + padY + Math.max(0, marY)
+}
+
+async function setTheme($: any, id: string) {
+  if (!applyTheme(id)) return false
+  await $.store.set('theme', id).catch(() => undefined)
+  if (home) {
+    await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
+    const { label, ...colors } = THEMES[themeId]
+    await $.fs.write(`${home}/.local/state/nerv/theme.json`, JSON.stringify({ theme: themeId, label, colors }, null, 2) + '\n').catch(() => undefined)
+  }
+  $.ui.invalidate('ui.render')
+  return true
+}
+
+async function refreshForge($: any) {
+  if (!home) return
+  const raw = await $.fs.read(`${home}/.local/state/forge/state.json`).catch(() => undefined)
+  if (typeof raw !== 'string') {
+    forge = undefined
+    forgeMissing = true
+    return
+  }
+  try {
+    forge = JSON.parse(raw)
+    forgeMissing = false
+  } catch {}
+}
+
+async function forgeCmd($: any, args: string) {
+  await $.command.run({ command: 'forge', args }).catch((err: any) => $.ui.toast(`forge: ${clip(String(err?.message || err), 70)}`))
+  await refreshForge($)
+  $.ui.invalidate('ui.render')
+}
+
+const FORGE_STATUS: Record<string, [string, string]> = {
+  running: ['OPERANDO', 'lime'],
+  paused: ['EN PAUSA', 'amber'],
+  pasa: ['PASA ✔', 'lime'],
+  'no-verificado': ['NO VERIFICADO', 'amber'],
+  falló: ['FALLÓ', 'red'],
+  parado: ['PARADO', 'muted'],
+}
+
+const tok = (n: number) => (!n ? '0' : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n))
+const bare = (id: string) => String(id || '').replace(/^[^/]+\//, '')
+const nice = (id: string) => forge?.labels?.[id] || bare(id)
+const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal: 'min', low: 'low', medium: 'med', high: 'high', xhigh: 'xhigh' }
+const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')
+
+function drawForge($: any, e: any, out: any[], h: any) {
+  const { Box, Button, Select, Input } = $.ui.resolve(e)
+  const { t, span, card, chip, w } = h
+  if (!forge) {
+    out.push(
+      card('forge-off', '⚒ FORGE', C.dim, [
+        t([span(forgeMissing ? 'forge no está cargado' : 'leyendo forge…', C.muted, { bold: true })]),
+        ...(forgeMissing
+          ? [
+              t([span('no existe ~/.local/state/forge/state.json', C.dim)]),
+              t([span('arrancá claude con el mod:', C.muted)]),
+              t([span(' claude --plugin-dir ~/projects/forge', C.cyan)]),
+              t([span('o activalo en /plugin › Installed', C.muted)]),
+            ]
+          : []),
+      ]),
+    )
+    return
+  }
+  const run = forge.run
+  const live = run && (run.status === 'running' || run.status === 'paused')
+  const [word, tone] = run ? FORGE_STATUS[run.status] || [String(run.status).toUpperCase(), 'muted'] : ['EN ESPERA', 'muted']
+  const toneColor = (C as any)[tone] || C.muted
+  const elapsed = run ? mmss((run.endedAt || now()) - run.startedAt) : ''
+  out.push(
+    Box({
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginRight: 2,
+      children: [
+        t([
+          span(' ⚒ FORGE ', C.ink, { bold: true, backgroundColor: C.purple }),
+          ...(run ? [] : [span(' SDD', C.orange, { bold: true })]),
+          ...(run ? [span(`  R ${run.round}/${run.cap}`, C.cyan, { bold: true }), span(`  ⏱ ${elapsed}`, C.muted)] : []),
+        ]),
+        t([
+          run && run.status !== 'parado'
+            ? span(` ${run.status === 'running' ? SPIN[frame % 4] : '◆'} ${word} `, C.ink, { bold: true, backgroundColor: toneColor })
+            : span(` ◎ ${word} `, C.muted, { backgroundColor: C.chip }),
+        ]),
+      ],
+    }),
+  )
+  if (run) out.push(t([span('» ', C.dim), span(clip(run.request, w), C.text)]))
+  const phases: any[] = run?.phases || PHASES.map((name) => ({ name, status: 'pending', model: forge.models?.[name] || '' }))
+  const node = (p: any) => {
+    const st = p.status
+    const icon = st === 'running' ? SPIN[frame % 4] : st === 'done' ? '✔' : st === 'failed' ? '✖' : '·'
+    const col = st === 'running' ? (blink() ? C.orange : C.purple) : st === 'done' ? C.lime : st === 'failed' ? C.red : C.dim
+    return [span(`${icon} `, col, { bold: st !== 'pending' }), span(p.name.toUpperCase(), col, { bold: st === 'running' })]
+  }
+  const arrow = span(' ─▶ ', C.dim)
+  const plugRows: any[] = []
+  if (w >= 44) plugRows.push(t([...node(phases[0]), arrow, ...node(phases[1]), arrow, ...node(phases[2]), arrow, ...node(phases[3])]))
+  else {
+    plugRows.push(t([...node(phases[0]), arrow, ...node(phases[1]), arrow]))
+    plugRows.push(t([span('  ', C.dim), ...node(phases[2]), arrow, ...node(phases[3])]))
+  }
+  plugRows.push(t([span('─'.repeat(w), C.dim)]))
+  for (const p of phases) {
+    const st = p.status
+    const col = st === 'running' ? C.orange : st === 'done' ? C.lime : st === 'failed' ? C.red : C.muted
+    const ms = st === 'running' && p.startedAt ? now() - p.startedAt : p.ms || 0
+    const eff = p.effort || forge.efforts?.[p.name] || 'auto'
+    const effTag = eff === 'auto' || forge.effortNotes?.[p.name] ? '' : `⚡${eff}`
+    plugRows.push(
+      Box({
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        children: [t([span(p.name.toUpperCase().padEnd(10), col, { bold: true }), span(clip(nice(p.model), Math.max(8, w - 11 - effTag.length)), C.text)]), t([span(effTag, C.orange)])],
+      }),
+    )
+    if (st !== 'pending') {
+      const who = (/\(([^)]+)\)$/.exec(p.responded || '') || [])[1] || p.responded || '…'
+      const stats = `${mmss(ms)} · ${p.steps || 0}p · ${tok(p.tokensIn || 0)}↓ ${tok(p.tokensOut || 0)}↑`
+      plugRows.push(
+        Box({
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          children: [t([span('  ↳ ', C.dim), span(clip(who, Math.max(6, w - 6 - stats.length)), C.pink)]), t([span(stats, C.muted)])],
+        }),
+      )
+    }
+  }
+  if (run?.verdicts?.length)
+    plugRows.push(t([span('VEREDICTOS ', C.muted), ...run.verdicts.map((v: string, i: number) => span(`${i ? ' → ' : ''}${v}`, v === 'pasa' ? C.lime : v === 'corregir' ? C.amber : C.red, { bold: true }))]))
+  out.push(card('forge-plug', '◢ ENTRY PLUG', live ? C.orange : C.violet, plugRows))
+
+  const all = Object.entries<any>(forge.profiles || {})
+  const mine = all.filter(([, p]) => p.source !== 'zero-pi').map(([n]) => n)
+  const zero = all.filter(([, p]) => p.source === 'zero-pi').map(([n]) => n)
+  const profileRows: any[] = [
+    Box({
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      columnGap: 1,
+      children: mine.map((n) => chip('profile-' + n, n, forge.profile === n, C.tabBg, () => void forgeCmd($, `profile ${n}`))),
+    }),
+  ]
+  if (zero.length)
+    profileRows.push(
+      Select({
+        key: 'fzero',
+        label: 'zero-pi',
+        options: [{ value: '-', label: zero.includes(forge.profile) ? '—' : `elegí uno de ${zero.length}…` }, ...zero.slice(0, 63).map((n) => ({ value: n, label: n.replace(/^zero:/, '') }))],
+        value: zero.includes(forge.profile) ? forge.profile : '-',
+        onSelect: (v: string) => {
+          if (v !== '-') void forgeCmd($, `profile ${v}`)
+        },
+      }),
+    )
+  out.push(card('forge-profiles', `◈ PERFIL · ${String(forge.profile).replace(/^zero:/, 'zero-pi › ')}`, C.purple, profileRows))
+
+  const catalog: Record<string, string[]> = forge.catalog || {}
+  const levels: string[] = forge.effortLevels || ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  const modelRows: any[] = []
+  for (const p of PHASES) {
+    const current = forge.models?.[p] || ''
+    const group = forgeGroup[p] || groupOf(current)
+    const groups = Object.keys(catalog).map((g) => ({ value: g, label: forge.groupLabels?.[g] || g }))
+    if (!groups.some((g) => g.value === group)) groups.unshift({ value: group, label: group })
+    let models = (catalog[group] || []).map((id) => ({ value: id, label: nice(id) }))
+    if (group === groupOf(current) && !models.some((m) => m.value === current)) models = [{ value: current, label: `${nice(current)} ⚠ no está en el CPAM` }, ...models]
+    models = models.slice(0, 64)
+    const note = forge.effortNotes?.[p] || ''
+    const effort = forge.efforts?.[p] || 'auto'
+    modelRows.push(
+      Box({
+        key: 'mrow-' + p,
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [
+          t([span(p.toUpperCase().padEnd(9), C.cyan, { bold: true })]),
+          Select({
+            key: 'fgroup-' + p,
+            options: groups.slice(0, 64),
+            value: group,
+            onSelect: (v: string) => {
+              forgeGroup[p] = v
+              $.ui.invalidate('ui.render')
+            },
+          }),
+        ],
+      }),
+      Box({
+        key: 'mrow2-' + p,
+        flexDirection: 'row',
+        columnGap: 1,
+        paddingLeft: 2,
+        children: [
+          ...(models.length
+            ? [Select({ key: 'fmodel-' + p, options: models, value: models.some((m) => m.value === current) ? current : undefined, onSelect: (v: string) => void forgeCmd($, `model ${p} ${v}`) })]
+            : [t([span('sin modelos', C.dim)])]),
+        ],
+      }),
+      note
+        ? t([span('  ⚡ n/a · ' + clip(note, w - 10), C.dim)])
+        : Box({
+            key: 'feffort-' + p,
+            flexDirection: 'row',
+            paddingLeft: 2,
+            columnGap: 1,
+            children: [
+              t([span('⚡', effort === 'auto' ? C.dim : C.orange)]),
+              ...levels.map((l) =>
+                Box({
+                  key: `fe-box-${p}-${l}`,
+                  paddingX: effort === l ? 1 : 0,
+                  backgroundColor: effort === l ? C.tabBg : undefined,
+                  children: [Button({ key: `fe-${p}-${l}`, label: EFFORT_SHORT[l] || l, plain: true, dimColor: effort !== l, onPress: () => void forgeCmd($, `effort ${p} ${l}`) })],
+                }),
+              ),
+            ],
+          }),
+    )
+  }
+  out.push(h.scard('forge-models', '⬡ MODELOS · EFFORT', C.violet, modelRows, 9))
+
+  const control: any[] = [
+    Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        t([span('MODO', C.muted, { bold: true })]),
+        ...[
+          ['interactive', 'interactivo'],
+          ['automatic', 'auto'],
+          ['ask', 'preguntar'],
+        ].map(([v, l]) => chip('fmode-' + v, l, forge.mode === v, C.tabBg, () => void forgeCmd($, `mode ${v}`))),
+      ],
+    }),
+    Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        t([span('CAP ', C.muted, { bold: true }), span(`${forge.cap} rondas`, C.cyan, { bold: true })]),
+        chip('fcap-down', ' − ', false, C.tabBg, () => void forgeCmd($, `cap ${Math.max(1, (forge.cap || 3) - 1)}`)),
+        chip('fcap-up', ' + ', false, C.tabBg, () => void forgeCmd($, `cap ${Math.min(9, (forge.cap || 3) + 1)}`)),
+      ],
+    }),
+  ]
+  if (live) control.push(Box({ flexDirection: 'row', children: [chip('fstop', '■ PARAR', true, C.red, () => void forgeCmd($, 'stop'))] }))
+  else
+    control.push(
+      Input({
+        key: 'fdraft',
+        placeholder: 'pedido para forge…',
+        value: forgeDraft,
+        onInput: (v: string) => (forgeDraft = v),
+        onSubmit: (v: string) => {
+          if (!v.trim()) return
+          forgeDraft = ''
+          void forgeCmd($, v.trim())
+        },
+      }),
+      Box({
+        flexDirection: 'row',
+        children: [
+          chip('fstart', '▶ INICIAR', true, C.tabBg, () => {
+            if (!forgeDraft.trim()) return void $.ui.toast('forge: escribí el pedido primero')
+            const text = forgeDraft.trim()
+            forgeDraft = ''
+            void forgeCmd($, text)
+          }),
+        ],
+      }),
+    )
+  out.push(card('forge-control', '▶ MANDO', live ? C.orange : C.lime, control))
 }
 
 async function openPane($: any) {
@@ -692,22 +1318,25 @@ export function register(on: any) {
     sessionId = (await $.session.id().catch(() => '')) || ''
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
+    applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
     const unit = home ? await $.fs.read(`${home}/.config/systemd/user/jcode-rail.service`).catch(() => '') : ''
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs', argumentHint: '[quiet | on | prs | hw | equipo]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
     refreshPRs($)
     if (tab === 'hw') refreshHw($)
     if (tab === 'crew') refreshCrew($)
+    if (tab === 'forge') refreshForge($)
     $.clock.every(125, () => {
       frame++
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
+      if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     })
     $.clock.every(20000, () => {
@@ -740,7 +1369,7 @@ export function register(on: any) {
     }
     if (arg === 'debug') {
       const panes = await $.ui.panes().catch((err: any) => String(err))
-      const st = { paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap }
+      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel() }
       return { text: 'nerv debug: ' + JSON.stringify(st) + ' panes=' + JSON.stringify(panes) }
     }
     if (arg === 'prs') {
@@ -748,11 +1377,17 @@ export function register(on: any) {
       $.ui.invalidate('ui.render')
       return {}
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'magi') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : 'magi'
+    if (arg.startsWith('tema') || arg.startsWith('theme')) {
+      const id = arg.split(/\s+/)[1] || ''
+      if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
+      return { text: `NERV: unidad ${THEMES[themeId].label}` }
+    }
+    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge') {
+      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
       if (tab === 'crew') await refreshCrew($)
+      if (tab === 'forge') await refreshForge($)
     }
     quiet = false
     await $.store.set('quiet', false).catch(() => undefined)
@@ -760,6 +1395,24 @@ export function register(on: any) {
     const r = await openPane($)
     $.ui.invalidate('ui.render')
     return r?.isPlaced ? {} : { text: `NERV: no hay lugar para la barra (${r?.reason || 'terminal angosta'})` }
+  })
+
+  on('ui.scroll', { requestId: PANE }, async ($: any, e: any, next: any) => {
+    const row = e.pointer?.row
+    const hit = typeof row === 'number' ? cardHits.find((c) => row >= c.top && row < c.bottom) : undefined
+    if (hit) {
+      const cur = cardScroll[hit.key] || 0
+      const nxt = Math.max(0, Math.min(cardMax[hit.key] || 0, cur + (e.by || 0)))
+      if (nxt !== cur) {
+        cardScroll[hit.key] = nxt
+        $.ui.invalidate('ui.render')
+        return {}
+      }
+    }
+    if (!bodyMax) return next(e)
+    bodyOffset = Math.max(0, Math.min(bodyMax, bodyOffset + (e.by || 0)))
+    $.ui.invalidate('ui.render')
+    return {}
   })
 
   on('ui.close', { id: PANE }, async ($: any, e: any, next: any) => {
@@ -798,6 +1451,14 @@ export function register(on: any) {
       lastProgress = now()
     }
     return next(e)
+  })
+
+  on('turn.step', async function* ($: any, e: any, next: any) {
+    if (!e.agentId && e.effort !== undefined && e.effort !== effort) {
+      setEffort(e.effort)
+      $.ui.invalidate('ui.render')
+    }
+    return yield* next(e)
   })
 
   on('turn.complete', async ($: any, e: any, next: any) => {
@@ -922,6 +1583,8 @@ export function register(on: any) {
         Text({ color: alert ? C.red : C.purple, bold: true, children: [alert ? '⚠ NERV ' : '⬢ NERV '] }),
         Text({ color: C.muted, children: [`SYNC ${ctx === undefined ? '–' : Math.round(ctx) + '%'} · 5H ${five === undefined ? '–' : Math.round(five) + '%'}`] }),
       ]
+      const lvl = effortLevel()
+      if (lvl) bits.push(Text({ color: hex(EFFORTS[lvl - 1].hue), children: [` · EFFORT ${effortName()} ${'▰'.repeat(lvl)}${'▱'.repeat(5 - lvl)}`] }))
       if (unverified.size) bits.push(Text({ color: C.amber, children: [` · ⚠ ${unverified.size} sin verificar`] }))
       if (patternBlue) bits.push(Text({ color: C.orange, children: [' · ◆ PATTERN BLUE'] }))
       bits.push(Text({ color: C.dim, children: [' · /nerv'] }))
