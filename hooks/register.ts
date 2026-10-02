@@ -1001,6 +1001,7 @@ function measure(el: any, width: number): number {
   if (el.type === 'Text') return p.wrap === 'wrap' ? Math.max(1, Math.ceil(textOf(el).length / Math.max(1, width))) : 1
   if (el.type !== 'Box') return 1
   if (p.display === 'none') return 0
+  if (typeof p.height === 'number') return p.height + Math.max(0, (p.marginTop ?? p.marginY ?? p.margin ?? 0) + (p.marginBottom ?? p.marginY ?? p.margin ?? 0))
   const border = p.borderStyle ? 2 : 0
   const padY = (p.paddingTop ?? p.paddingY ?? p.padding ?? 0) + (p.paddingBottom ?? p.paddingY ?? p.padding ?? 0)
   const marY = (p.marginTop ?? p.marginY ?? p.margin ?? 0) + (p.marginBottom ?? p.marginY ?? p.margin ?? 0)
@@ -1446,8 +1447,8 @@ export function register(on: any) {
       if (nxt !== cur) {
         cardScroll[hit.key] = nxt
         $.ui.invalidate('ui.render')
-        return {}
       }
+      return {}
     }
     if (!bodyMax) return next(e)
     bodyOffset = Math.max(0, Math.min(bodyMax, bodyOffset + (e.by || 0)))
