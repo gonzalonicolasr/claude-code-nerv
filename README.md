@@ -10,7 +10,9 @@ sesiones y un panel para manejar [forge](https://github.com/gonzalonicolasr/clau
 
 La cabecera queda siempre fija: dos cintas de neón animadas, la tríada **MAGI** (MELCHIOR,
 BALTHASAR y CASPER), el estado (en espera u operando) y las pestañas. Abajo, también fijo, está el
-**medidor de effort** del modelo. El contenido de cada pestaña scrollea por su cuenta.
+**medidor de effort** del modelo. El contenido de cada pestaña scrollea por su cuenta, las tarjetas
+largas tienen su propio scroll, y cualquier tarjeta se pliega con un click en su `▾` (arrancan
+abiertas y lo que pliegues queda guardado).
 
 - **1 · MAGI**
   - **Sincronización:** modelo, contexto (SYNC), cuota de 5 h y 7 días, y costo de la sesión. Con
@@ -19,13 +21,18 @@ BALTHASAR y CASPER), el estado (en espera u operando) y las pestañas. Abajo, ta
   - **Actividad:** qué herramienta está corriendo y hace cuánto, archivos editados **sin verificar**
     y **PATTERN BLUE** cuando el mismo error se repite tres veces.
   - **Tareas:** comandos y subagentes en segundo plano, con su estado.
-  - **PRs** abiertas tuyas en el repo y el **CI** de la rama, como links.
   - **ÚLTIMA MISIÓN:** si la sesión anterior en esa carpeta se cortó sin cerrarse, te muestra el
     último pedido.
-- **2 · HARDWARE:** GPU, VRAM, CPU y RAM con un gráfico animado, periféricos, monitores y máquinas
+- **2 · GIT**
+  - **Rama:** upstream, commits adelante y atrás, y cambios sin commitear.
+  - **Commits:** un mapa de calor como el de GitHub, de frío a caliente, con el total, la racha de
+    días seguidos y los commits de hoy.
+  - **Últimos commits** y las **PRs abiertas del repo**, con su estado de review y de checks, como
+    links.
+- **3 · HW:** GPU, VRAM, CPU y RAM con un gráfico animado, periféricos, monitores y máquinas
   secundarias.
-- **3 · EQUIPO:** tus sesiones de [herdr](https://herdr.dev), con las que te necesitan primero.
-- **4 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
+- **4 · EQUIPO:** tus sesiones de [herdr](https://herdr.dev), con las que te necesitan primero.
+- **5 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
   botón para iniciar una corrida.
 
 Además, el spinner de "pensando" se reemplaza por un escáner animado con verbos EVA
@@ -65,12 +72,12 @@ Si tenés varios mods, separalos con `:`.
 |---|---|
 | `/nerv` o `/nerv on` | Abre la barra |
 | `/nerv quiet` | La esconde y apaga las animaciones (para grabar o compartir pantalla) |
-| `/nerv magi` · `hw` · `equipo` · `forge` | Va a esa pestaña |
+| `/nerv magi` · `git` · `hw` · `equipo` · `forge` | Va a esa pestaña |
 | `/nerv tema eva01\|eva00\|eva02\|eva08\|mark06` | Cambia los colores de todo el panel |
 | `/nerv prs` | Refresca las PRs y el CI |
 | `/nerv debug` | Muestra el estado interno |
 
-Con la barra enfocada, las teclas `1` a `4` cambian de pestaña. Todo lo que se ve como botón se
+Con la barra enfocada, las teclas `1` a `5` cambian de pestaña. Todo lo que se ve como botón se
 puede clickear.
 
 ## Temas

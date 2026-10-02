@@ -49,7 +49,7 @@ test('la barra dibuja la tríada MAGI, las pestañas y el medidor de effort abaj
   expect(text).toContain('MAGI')
   expect(await m.find({ key: 'effort-foot' })).toBeDefined()
   await m.press({ key: 'tab-hw' })
-  expect(JSON.stringify(await m.drawn())).toContain('◆ HARDWARE')
+  expect(JSON.stringify(await m.drawn())).toContain('◆ HW')
 })
 
 const PANE_PROPS = { title: 'NERV', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 60, contentRows: 60 }, view: {} }

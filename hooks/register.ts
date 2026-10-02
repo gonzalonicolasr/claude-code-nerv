@@ -39,9 +39,10 @@ const LONG_TURN_MS = 180000
 const BATTERY_AT = 85
 const TABS = [
   { id: 'magi', label: 'MAGI', hotkey: '1' },
-  { id: 'hw', label: 'HARDWARE', hotkey: '2' },
-  { id: 'crew', label: 'EQUIPO', hotkey: '3' },
-  { id: 'forge', label: 'FORGE', hotkey: '4' },
+  { id: 'git', label: 'GIT', hotkey: '2' },
+  { id: 'hw', label: 'HW', hotkey: '3' },
+  { id: 'crew', label: 'EQUIPO', hotkey: '4' },
+  { id: 'forge', label: 'FORGE', hotkey: '5' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -76,6 +77,8 @@ let prError = ''
 let ghMe = ''
 let commitDays: Record<string, number> = {}
 let commitAuthor = ''
+let gitInfo: any = { ok: false, upstream: '', ahead: 0, behind: 0, dirty: 0, recent: [] }
+const folded = new Set<string>()
 let todos: string[] = []
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
@@ -245,6 +248,20 @@ async function refreshLocal($: any) {
   if (lg?.exitCode === 0) for (const d of lg.stdout.split('\n')) if (d) days[d] = (days[d] || 0) + 1
   commitDays = days
   commitAuthor = email
+  const stb = await $.process.run(['git', 'status', '--porcelain=2', '--branch'], { cwd, timeoutMs: 8000 }).catch(() => undefined)
+  const sl = stb?.exitCode === 0 ? stb.stdout.split('\n') : []
+  const ab = (sl.find((l: string) => l.startsWith('# branch.ab')) || '').match(/\+(\d+) -(\d+)/)
+  const up = (sl.find((l: string) => l.startsWith('# branch.upstream')) || '').replace('# branch.upstream ', '')
+  const dirty = sl.filter((l: string) => l && !l.startsWith('#')).length
+  const rl = await $.process.run(['git', 'log', '-8', '--format=%h%x1f%s%x1f%ar%x1f%an'], { cwd, timeoutMs: 8000 }).catch(() => undefined)
+  gitInfo = {
+    ok: stb?.exitCode === 0,
+    upstream: up,
+    ahead: ab ? Number(ab[1]) : 0,
+    behind: ab ? Number(ab[2]) : 0,
+    dirty,
+    recent: rl?.exitCode === 0 ? rl.stdout.split('\n').filter(Boolean).map((l: string) => l.split('\x1f')) : [],
+  }
   if (home && paneId) {
     const raw = await $.fs.read(`${home}/.local/state/herdr-todos.json`).catch(() => '')
     try {
@@ -576,12 +593,27 @@ function draw($: any, e: any) {
   const w = cols - 4
   const t = (children: any[], color = C.text, extra: any = {}) => Text({ wrap: 'truncate', color, children, ...extra })
   const span = (s: string, color: string, extra: any = {}) => Text({ color, children: [s], ...extra })
+  const foldBtn = (key: string) =>
+    Button({
+      key: 'fold-' + key,
+      label: folded.has(key) ? '▸' : '▾',
+      plain: true,
+      dimColor: true,
+      onPress: async () => {
+        if (folded.has(key)) folded.delete(key)
+        else folded.add(key)
+        $.ui.invalidate('ui.render')
+        await $.store.set('folded', [...folded]).catch(() => undefined)
+      },
+    })
+  const titleRow = (key: string, parts: any[], color: string) =>
+    Box({ key: 'title-' + key, flexDirection: 'row', justifyContent: 'space-between', children: [t(parts, color), foldBtn(key)] })
   const card = (key: string, title: string, color: string, rows: any[]) =>
-    Box({ key, flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, children: [t([span(title, color, { bold: true })], color), ...rows] })
+    Box({ key, flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, children: [titleRow(key, [span(title, color, { bold: true })], color), ...(folded.has(key) ? [] : rows)] })
   const kv = (left: any[], right: any[]) => Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t(left), t(right)] })
   const scard = (key: string, title: string, color: string, rows: any[], max: number) => {
     const content = measure(rows, w)
-    if (!dock || content <= max) return card(key, title, color, rows)
+    if (!dock || content <= max || folded.has(key)) return card(key, title, color, rows)
     const cmax = content - max
     const off = Math.max(0, Math.min(cardScroll[key] || 0, cmax))
     cardScroll[key] = off
@@ -597,7 +629,7 @@ function draw($: any, e: any) {
       borderColor: color,
       paddingLeft: 1,
       children: [
-        t([span(title, color, { bold: true }), span(`  ↕ ${off + 1}-${off + max}/${content}`, C.dim)], color),
+        Box({ key: 'title-' + key, flexDirection: 'row', justifyContent: 'space-between', paddingRight: 1, children: [t([span(title, color, { bold: true }), span(`  ↕ ${off + 1}-${off + max}/${content}`, C.dim)], color), foldBtn(key)] }),
         Box({
           key: key + '-win',
           flexDirection: 'row',
@@ -756,13 +788,6 @@ function draw($: any, e: any) {
       act.push(t([span(blink() ? '◆ PATTERN BLUE' : '◇ PATTERN BLUE', C.orange, { bold: true }), span(` · ${patternBlue.count}× ${patternBlue.tool}`, C.orange)]))
       act.push(t([span('  ' + clip(patternBlue.text, w - 2), C.muted)]))
     }
-    if (e.surface === 'terminal' && Raster && Object.keys(commitDays).length) {
-      const weeks = Math.max(4, Math.floor((w + 1) / 2))
-      const st = commitStats(weeks)
-      act.push(t([span('▤ ', C.purple), span(`${st.total} commits`, C.text, { bold: true }), span(` · ${weeks} sem`, C.dim), span(st.streak ? `  ▲ racha ${st.streak} d` : '', C.orange), span(`  hoy ${st.today}`, st.today ? C.lime : C.dim)]))
-      act.push(Raster({ key: 'heat', columns: weeks * 2 - 1, rows: 7, cells: heatCells(weeks * 2 - 1, weeks) }))
-      act.push(t([span('frío ', C.dim), ...[0, 1, 2, 5, 8, 12].map((n) => span('■', '#' + heatColor(n).toString(16).padStart(6, '0'))), span(' caliente', C.dim)]))
-    }
     out.push(card('act', '▶ ACTIVIDAD', patternBlue ? C.orange : C.violet, act))
 
     const live = [...tasks.values()].filter((a) => !a.end || now() - a.end < 600000).slice(-6)
@@ -781,28 +806,6 @@ function draw($: any, e: any) {
       )
     }
 
-    const prRows: any[] = []
-    if (prError) prRows.push(t([span(prError, C.muted)]))
-    else if (!prs) prRows.push(t([span('consultando…', C.muted)]))
-    else if (!prs.length) prRows.push(t([span('ninguna abierta', C.muted)]))
-    else
-      for (const p of prs) {
-        const checks = p.statusCheckRollup || []
-        const failed = checks.some((c: any) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.conclusion || c.state))
-        const pending = checks.some((c: any) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.status || c.state))
-        const cic = !checks.length ? ['·', C.dim] : failed ? ['✖', C.red] : pending ? ['◌', C.amber] : ['●', C.lime]
-        const rv = p.reviewDecision === 'APPROVED' ? ['✔', C.lime] : p.reviewDecision === 'CHANGES_REQUESTED' ? ['✎', C.red] : p.isDraft ? ['◇', C.dim] : ['◌', C.amber]
-        const who = p.author?.login && p.author.login !== ghMe ? ` @${p.author.login}` : ''
-        prRows.push(
-          Box({
-            key: 'prr-' + p.number,
-            flexDirection: 'row',
-            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + p.number, href: p.url, label: clip(`#${p.number} ${p.title}${who}`, w - 5) })],
-          }),
-        )
-      }
-    const counts = prs?.length ? ` · ${prs.length} abiertas` : ''
-    out.push(scard('prs', `⎇ PRs${counts}${branch ? ' · ' + clip(branch, w - 24) : ''}`, C.violet, prRows, 8))
 
     if (todos.length) out.push(card('todos', `□ ${todos.length} TO-DO${todos.length > 1 ? 'S' : ''}`, C.amber, todos.slice(0, 4).map((x) => t([span('□ ' + clip(x, w - 2), C.todo)]))))
     if (health.when) out.push(t([span(health.ok ? '♥ ' : '✖ ', health.ok ? C.lime : C.red), span(clip(health.text, w - 10), health.ok ? C.muted : C.red), span(' ' + health.when, C.dim)]))
@@ -850,6 +853,65 @@ function draw($: any, e: any) {
         ],
       }),
     )
+  }
+
+  if (tab === 'git') {
+    const g = gitInfo
+    const gi: any[] = []
+    if (!g.ok) gi.push(t([span('no es un repo de git', C.muted)]))
+    else {
+      gi.push(t([span('⎇ ', C.purple), span(clip(branch || '?', w - 20), C.text, { bold: true }), span(g.upstream ? `  → ${clip(g.upstream, 14)}` : '  sin upstream', C.dim)]))
+      gi.push(
+        t([
+          span(`▲ ${g.ahead} `, g.ahead ? C.lime : C.dim),
+          span(`▼ ${g.behind} `, g.behind ? C.amber : C.dim),
+          span(g.dirty ? `  ● ${g.dirty} cambio${g.dirty > 1 ? 's' : ''} sin commitear` : '  ✔ limpio', g.dirty ? C.orange : C.lime),
+        ]),
+      )
+    }
+    out.push(card('git-branch', '⎇ RAMA', C.purple, gi))
+    const act: any[] = []
+    if (e.surface === 'terminal' && Raster && Object.keys(commitDays).length) {
+      const weeks = Math.max(4, Math.floor((w + 1) / 2))
+      const st = commitStats(weeks)
+      act.push(t([span('▤ ', C.purple), span(`${st.total} commits`, C.text, { bold: true }), span(` · ${weeks} sem`, C.dim), span(st.streak ? `  ▲ racha ${st.streak} d` : '', C.orange), span(`  hoy ${st.today}`, st.today ? C.lime : C.dim)]))
+      act.push(Raster({ key: 'heat', columns: weeks * 2 - 1, rows: 7, cells: heatCells(weeks * 2 - 1, weeks) }))
+      act.push(t([span('frío ', C.dim), ...[0, 1, 2, 5, 8, 12].map((n) => span('■', '#' + heatColor(n).toString(16).padStart(6, '0'))), span(' caliente', C.dim)]))
+    }
+    if (!act.length) act.push(t([span('sin commits en las últimas semanas', C.muted)]))
+    out.push(card('git-heat', '▤ COMMITS', C.violet, act))
+    if (g.recent.length)
+      out.push(
+        scard(
+          'git-log',
+          '◷ ÚLTIMOS COMMITS',
+          C.purple,
+          g.recent.map((c: string[]) => t([span(c[0] + ' ', C.orange), span(clip(c[1] || '', w - 20), C.text), span(' ' + (c[2] || '').replace(/ ago$/, ''), C.dim)])),
+          6,
+        ),
+      )
+    const prRows: any[] = []
+    if (prError) prRows.push(t([span(prError, C.muted)]))
+    else if (!prs) prRows.push(t([span('consultando…', C.muted)]))
+    else if (!prs.length) prRows.push(t([span('ninguna abierta', C.muted)]))
+    else
+      for (const p of prs) {
+        const checks = p.statusCheckRollup || []
+        const failed = checks.some((c: any) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(c.conclusion || c.state))
+        const pending = checks.some((c: any) => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(c.status || c.state))
+        const cic = !checks.length ? ['·', C.dim] : failed ? ['✖', C.red] : pending ? ['◌', C.amber] : ['●', C.lime]
+        const rv = p.reviewDecision === 'APPROVED' ? ['✔', C.lime] : p.reviewDecision === 'CHANGES_REQUESTED' ? ['✎', C.red] : p.isDraft ? ['◇', C.dim] : ['◌', C.amber]
+        const who = p.author?.login && p.author.login !== ghMe ? ` @${p.author.login}` : ''
+        prRows.push(
+          Box({
+            key: 'prr-' + p.number,
+            flexDirection: 'row',
+            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + p.number, href: p.url, label: clip(`#${p.number} ${p.title}${who}`, w - 5) })],
+          }),
+        )
+      }
+    const counts = prs?.length ? ` · ${prs.length} abiertas` : ''
+    out.push(scard('prs', `⎇ PRs${counts}${branch ? ' · ' + clip(branch, w - 24) : ''}`, C.violet, prRows, 8))
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
@@ -1421,12 +1483,13 @@ export function register(on: any) {
     sessionId = (await $.session.id().catch(() => '')) || ''
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
+    for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
     const unit = home ? await $.fs.read(`${home}/.config/systemd/user/jcode-rail.service`).catch(() => '') : ''
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | magi | git | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -1485,8 +1548,8 @@ export function register(on: any) {
       if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
       return { text: `NERV: unidad ${THEMES[themeId].label}` }
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : 'magi'
+    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git') {
+      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
       if (tab === 'crew') await refreshCrew($)
