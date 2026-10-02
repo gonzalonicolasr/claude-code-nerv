@@ -88,6 +88,7 @@ let bodyMax = 0
 let bodyTab = ''
 let lastView = 0
 let openDrop = ''
+const forgeAccounts: Record<string, boolean> = {}
 const cardScroll: Record<string, number> = {}
 const cardMax: Record<string, number> = {}
 let cardHits: { key: string; top: number; bottom: number }[] = []
@@ -1080,55 +1081,6 @@ const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(i
 function drawForge($: any, e: any, out: any[], h: any) {
   const { Box, Button, Input } = $.ui.resolve(e)
   const { t, span, card, chip, w } = h
-  const drop = (key: string, prefix: string, value: string, options: { value: string; label: string }[], onPick: (v: string) => void, indent = 0) => {
-    const open = openDrop === key
-    const cur = options.find((o) => o.value === value)?.label ?? value
-    const head = Box({
-      key: 'dd-' + key,
-      flexDirection: 'row',
-      paddingLeft: indent,
-      children: [
-        ...(prefix ? [t([span(prefix + ' ', C.muted)])] : []),
-        Box({
-          key: 'ddb-' + key,
-          paddingX: 1,
-          backgroundColor: open ? C.tabBg : C.chipDim,
-          children: [Button({ key: 'ddh-' + key, label: `${clip(cur, w - indent - prefix.length - 6)} ${open ? '▴' : '▾'}`, plain: true, onPress: () => ((openDrop = open ? '' : key), $.ui.invalidate('ui.render')) })],
-        }),
-      ],
-    })
-    if (!open) return [head]
-    return [
-      head,
-      ...options.map((o, i) =>
-        Box({
-          key: `ddo-${key}-${i}`,
-          paddingLeft: indent + 2,
-          flexDirection: 'row',
-          children: [
-            t([span(o.value === value ? '● ' : '○ ', o.value === value ? C.lime : C.dim)]),
-            Box({
-              key: `ddob-${key}-${i}`,
-              backgroundColor: o.value === value ? C.chipDim : undefined,
-              children: [
-                Button({
-                  key: `ddp-${key}-${i}`,
-                  label: clip(o.label, w - indent - 6),
-                  plain: true,
-                  dimColor: o.value !== value,
-                  onPress: () => {
-                    openDrop = ''
-                    onPick(o.value)
-                    $.ui.invalidate('ui.render')
-                  },
-                }),
-              ],
-            }),
-          ],
-        }),
-      ),
-    ]
-  }
   if (!forge) {
     out.push(
       card('forge-off', '⚒ FORGE', C.dim, [
@@ -1170,7 +1122,8 @@ function drawForge($: any, e: any, out: any[], h: any) {
     }),
   )
   if (run) out.push(t([span('» ', C.dim), span(clip(run.request, w), C.text)]))
-  const phases: any[] = run?.phases || PHASES.map((name) => ({ name, status: 'pending', model: forge.models?.[name] || '' }))
+  const order: string[] = Array.isArray(forge.phaseOrder) && forge.phaseOrder.length ? forge.phaseOrder : PHASES
+  const phases: any[] = run?.phases || order.map((name) => ({ name, status: 'pending', model: forge.models?.[name] || '' }))
   const node = (p: any) => {
     const st = p.status
     const icon = st === 'running' ? SPIN[frame % 4] : st === 'done' ? '✔' : st === 'failed' ? '✖' : '·'
@@ -1179,11 +1132,20 @@ function drawForge($: any, e: any, out: any[], h: any) {
   }
   const arrow = span(' ─▶ ', C.dim)
   const plugRows: any[] = []
-  if (w >= 44) plugRows.push(t([...node(phases[0]), arrow, ...node(phases[1]), arrow, ...node(phases[2]), arrow, ...node(phases[3])]))
-  else {
-    plugRows.push(t([...node(phases[0]), arrow, ...node(phases[1]), arrow]))
-    plugRows.push(t([span('  ', C.dim), ...node(phases[2]), arrow, ...node(phases[3])]))
-  }
+  let line: any[] = []
+  let used = 0
+  phases.forEach((p: any, i: number) => {
+    const add = p.name.length + 2 + (i < phases.length - 1 ? 4 : 0)
+    if (used && used + add > w) {
+      plugRows.push(t(line))
+      line = [span('  ', C.dim)]
+      used = 2
+    }
+    line.push(...node(p))
+    if (i < phases.length - 1) line.push(arrow)
+    used += add
+  })
+  if (line.length) plugRows.push(t(line))
   plugRows.push(t([span('─'.repeat(w), C.dim)]))
   for (const p of phases) {
     const st = p.status
@@ -1234,62 +1196,130 @@ function drawForge($: any, e: any, out: any[], h: any) {
   const profileRows: any[] = []
   for (const sec of sections) {
     profileRows.push(t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]))
-    profileRows.push(
-      Box({
-        key: 'psec-' + sec.title,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        columnGap: 1,
-        children: sec.names.map((n) => {
-          const bad = broken(forge.profiles[n])
-          const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/-/g, ' ') + (bad ? ' ⚠' : '')
-          return chip('profile-' + n, clip(label, w - 2), forge.profile === n, bad ? C.chipDim : C.tabBg, () => void forgeCmd($, `profile ${n}`))
+    const colW = Math.floor((w - 1) / 2)
+    for (let i = 0; i < sec.names.length; i += 2) {
+      profileRows.push(
+        Box({
+          key: `psec-${sec.title}-${i}`,
+          flexDirection: 'row',
+          columnGap: 1,
+          children: sec.names.slice(i, i + 2).map((n) => {
+            const bad = broken(forge.profiles[n])
+            const on = forge.profile === n
+            const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/-/g, ' ')
+            return Box({
+              key: 'pg-' + n,
+              width: colW,
+              paddingX: 1,
+              backgroundColor: on ? C.tabBg : C.chipDim,
+              children: [Button({ key: 'profile-' + n, label: clip((on ? '● ' : '') + label + (bad ? ' ⚠' : ''), colW - 2), plain: true, dimColor: !on, onPress: () => void forgeCmd($, `profile ${n}`) })],
+            })
+          }),
         }),
-      }),
-    )
+      )
+    }
   }
   const shown = String(forge.profile).replace(/^zero:/, 'zero-pi › ').replace(/personal-/, '')
   out.push(h.scard('forge-profiles', `◈ PERFIL · ${clip(shown, w - 22)}`, C.purple, profileRows, 10))
 
   const catalog: Record<string, string[]> = forge.catalog || {}
   const levels: string[] = forge.effortLevels || ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  const pill = (key: string, label: string, active: boolean, color: string, onPress: () => void) =>
+    Box({ key: 'pb-' + key, paddingX: 1, backgroundColor: active ? C.tabBg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active && color === C.dim, onPress })] })
+  const item = (key: string, mark: string, markColor: string, label: string, active: boolean, onPress: () => void, indent = 2) =>
+    Box({
+      key: 'it-' + key,
+      flexDirection: 'row',
+      paddingLeft: indent,
+      children: [t([span(mark + ' ', markColor)]), Box({ key: 'itb-' + key, backgroundColor: active ? C.chipDim : undefined, children: [Button({ key, label: clip(label, w - indent - 4), plain: true, dimColor: !active, onPress })] })],
+    })
   const modelRows: any[] = []
-  for (const p of PHASES) {
+  for (const p of order) {
     const current = forge.models?.[p] || ''
-    const group = forgeGroup[p] || groupOf(current)
-    const groups = Object.keys(catalog).map((g) => ({ value: g, label: forge.groupLabels?.[g] || g }))
-    if (!groups.some((g) => g.value === group)) groups.unshift({ value: group, label: group })
-    let models = (catalog[group] || []).map((id) => ({ value: id, label: nice(id) }))
-    if (group === groupOf(current) && !models.some((m) => m.value === current)) models = [{ value: current, label: `${nice(current)} ⚠ no está en el CPAM` }, ...models]
-    models = models.slice(0, 64)
     const note = forge.effortNotes?.[p] || ''
     const effort = forge.efforts?.[p] || 'auto'
+    const mOpen = openDrop === 'fmodel-' + p
+    const eOpen = openDrop === 'feffort-' + p
+    const group = forgeGroup[p] || groupOf(current)
+    const curLabel = current ? nice(current) : 'elegí modelo'
+    const effLabel = note ? '⚡ n/a' : `⚡ ${EFFORT_SHORT[effort] || effort} ${eOpen ? '▴' : '▾'}`
     modelRows.push(
-      ...drop('fgroup-' + p, p.toUpperCase().padEnd(9), group, groups, (v) => {
-        forgeGroup[p] = v
-        openDrop = 'fmodel-' + p
-      }),
-      ...(models.length ? drop('fmodel-' + p, '', current, models, (v) => void forgeCmd($, `model ${p} ${v}`), 2) : [t([span('  sin modelos', C.dim)])]),
-      note
-        ? t([span('  ⚡ n/a · ' + clip(note, w - 10), C.dim)])
-        : Box({
-            key: 'feffort-' + p,
+      Box({
+        key: 'mrow-' + p,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        children: [
+          Box({
+            key: 'mrl-' + p,
             flexDirection: 'row',
-            paddingLeft: 2,
-            columnGap: 1,
             children: [
-              t([span('⚡', effort === 'auto' ? C.dim : C.orange)]),
-              ...levels.map((l) =>
-                Box({
-                  key: `fe-box-${p}-${l}`,
-                  paddingX: effort === l ? 1 : 0,
-                  backgroundColor: effort === l ? C.tabBg : undefined,
-                  children: [Button({ key: `fe-${p}-${l}`, label: EFFORT_SHORT[l] || l, plain: true, dimColor: effort !== l, onPress: () => void forgeCmd($, `effort ${p} ${l}`) })],
-                }),
-              ),
+              t([span(p.toUpperCase().padEnd(10), mOpen || eOpen ? C.lime : C.cyan, { bold: true })]),
+              pill('ddh-fmodel-' + p, `${clip(curLabel, w - 22)} ${mOpen ? '▴' : '▾'}`, mOpen, C.text, () => {
+                openDrop = mOpen ? '' : 'fmodel-' + p
+                forgeGroup[p] = groupOf(current)
+                forgeAccounts[p] = false
+                $.ui.invalidate('ui.render')
+              }),
             ],
           }),
+          note
+            ? t([span(effLabel, C.dim)])
+            : pill('ddh-feffort-' + p, effLabel, eOpen, effort === 'auto' ? C.dim : C.orange, () => {
+                openDrop = eOpen ? '' : 'feffort-' + p
+                $.ui.invalidate('ui.render')
+              }),
+        ],
+      }),
     )
+    if (mOpen && forgeAccounts[p]) {
+      const groups = Object.keys(catalog)
+      groups.forEach((g, i) =>
+        modelRows.push(
+          item(`ddg-fmodel-${p}-${i}`, g === group ? '●' : '○', g === group ? C.lime : C.dim, `${forge.groupLabels?.[g] || g}  ${(catalog[g] || []).length}`, g === group, () => {
+            forgeGroup[p] = g
+            forgeAccounts[p] = false
+            $.ui.invalidate('ui.render')
+          }),
+        ),
+      )
+    } else if (mOpen) {
+      let models = (catalog[group] || []).map((id) => ({ value: id, label: nice(id) }))
+      if (group === groupOf(current) && current && !models.some((m) => m.value === current)) models = [{ value: current, label: `${nice(current)} ⚠ no está en el CPAM` }, ...models]
+      modelRows.push(
+        item(`ddg-back-${p}`, '‹', C.cyan, `cuentas · ${forge.groupLabels?.[group] || group}`, false, () => {
+          forgeAccounts[p] = true
+          $.ui.invalidate('ui.render')
+        }),
+      )
+      models.forEach((m, i) =>
+        modelRows.push(
+          item(`ddp-fmodel-${p}-${i}`, m.value === current ? '●' : '○', m.value === current ? C.lime : C.dim, m.label, m.value === current, () => {
+            openDrop = ''
+            void forgeCmd($, `model ${p} ${m.value}`)
+            $.ui.invalidate('ui.render')
+          }),
+        ),
+      )
+      if (!models.length) modelRows.push(t([span('    sin modelos en esta cuenta', C.dim)]))
+    }
+    if (eOpen && !note)
+      modelRows.push(
+        Box({
+          key: 'feffort-' + p,
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          columnGap: 1,
+          paddingLeft: 2,
+          children: levels.map((l) =>
+            pill(`fe-${p}-${l}`, EFFORT_SHORT[l] || l, effort === l, C.text, () => {
+              openDrop = ''
+              void forgeCmd($, `effort ${p} ${l}`)
+              $.ui.invalidate('ui.render')
+            }),
+          ),
+        }),
+      )
+    if (eOpen && note) modelRows.push(t([span('  ' + clip(note, w - 2), C.dim)]))
   }
   out.push(h.scard('forge-models', '⬡ MODELOS · EFFORT', C.violet, modelRows, 9))
 
