@@ -1363,8 +1363,28 @@ const GATE_INFO: Record<string, string> = {
   promotion: 'escala a /forge si el runner falla 2 veces',
 }
 
+async function viaInbox($: any, mod: string, args: string): Promise<boolean> {
+  const sid = home ? await $.session.id().catch(() => '') : ''
+  if (!sid) return false
+  const path = `${home}/.local/state/${mod}/inbox-${sid}.json`
+  const id = `${now()}-${Math.random().toString(36).slice(2, 8)}`
+  try {
+    await $.fs.write(path, JSON.stringify({ id, args, at: now() }) + '\n')
+  } catch {
+    return false
+  }
+  for (let i = 0; i < 15; i++) {
+    await $.clock.sleep(100)
+    try {
+      const back = JSON.parse(String((await $.fs.read(path).catch(() => '')) || '{}'))
+      if (back.id === id && back.done) return true
+    } catch {}
+  }
+  return false
+}
+
 async function forgeCmd($: any, args: string) {
-  await $.command.run({ command: 'forge', args }).catch((err: any) => $.ui.toast(`forge: ${clip(String(err?.message || err), 70)}`))
+  if (!(await viaInbox($, 'forge', args))) await $.command.run({ command: 'forge', args }).catch((err: any) => $.ui.toast(`forge: ${clip(String(err?.message || err), 70)}`))
   await refreshForge($)
   $.ui.invalidate('ui.render')
 }
