@@ -670,6 +670,7 @@ function draw($: any, e: any) {
   const dock = e.props.placement === 'dock' && (e.props.scroll?.bodyRows || 0) > 0
   for (const k of Object.keys(cardMax)) delete cardMax[k]
   const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
+  const compact = !dock
   const w = cols - 4
   const t = (children: any[], color = C.text, extra: any = {}) => Text({ wrap: 'truncate', color, children, ...extra })
   const span = (s: string, color: string, extra: any = {}) => Text({ color, children: [s], ...extra })
@@ -729,6 +730,13 @@ function draw($: any, e: any) {
   const out: any[] = []
   const alert = battery()
   const ink = C.ink
+  const magi = ['MELCHIOR·1', 'BALTHASAR·2', 'CASPER·3']
+  const vote = (i: number) => {
+    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: ink, bg: blink() ? C.red : C.pink }
+    if (working && Math.floor(frame / 3) % 3 === i) return { word: '審議', fg: ink, bg: C.lime }
+    if (working) return { word: '待機', fg: C.purple, bg: C.chip }
+    return { word: '承認', fg: C.muted, bg: C.chipDim }
+  }
   out.push(
     Box({
       flexDirection: 'row',
@@ -741,6 +749,8 @@ function draw($: any, e: any) {
           span(' ⟋ MAGI', C.dim),
         ]),
         t([
+          ...(compact ? [0, 1, 2].map((i) => span(` ${'MBC'[i]}·${vote(i).word} `, vote(i).fg, { backgroundColor: vote(i).bg })) : []),
+          span(compact ? ' ' : ''),
           working
             ? span(` ${SPIN[frame % 4]} OPERANDO `, ink, { bold: true, backgroundColor: C.lime })
             : span(' ◎ EN ESPERA ', C.muted, { backgroundColor: C.chip }),
@@ -748,14 +758,8 @@ function draw($: any, e: any) {
       ],
     }),
   )
-  if (e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 3, cells: softWave(cols, 3) }))
-  const magi = ['MELCHIOR·1', 'BALTHASAR·2', 'CASPER·3']
-  const vote = (i: number) => {
-    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: ink, bg: blink() ? C.red : C.pink }
-    if (working && Math.floor(frame / 3) % 3 === i) return { word: '審議', fg: ink, bg: C.lime }
-    if (working) return { word: '待機', fg: C.purple, bg: C.chip }
-    return { word: '承認', fg: C.muted, bg: C.chipDim }
-  }
+  if (!compact && e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 3, cells: softWave(cols, 3) }))
+  if (!compact)
   out.push(
     Box({
       flexDirection: 'row',
@@ -775,8 +779,9 @@ function draw($: any, e: any) {
     }),
   )
   const tabLabel = (x: (typeof TABS)[number]) => (tab === x.id ? `◆ ${x.label}` : x.label)
-  const perRow = 3
-  const cellW = Math.floor((cols - (perRow - 1)) / perRow)
+  const oneRow = TABS.reduce((n, x) => n + tabLabel(x).length + 4, 0) <= cols
+  const perRow = compact && oneRow ? TABS.length : 3
+  const cellW = perRow === TABS.length ? Math.max(...TABS.map((x) => tabLabel(x).length + 3)) + 1 : Math.floor((cols - (perRow - 1)) / perRow)
   const tabButton = (x: (typeof TABS)[number]) =>
     Box({
       key: 'tabbox-' + x.id,
@@ -803,7 +808,7 @@ function draw($: any, e: any) {
       ],
     })
   for (let i = 0; i < TABS.length; i += perRow)
-    out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 ? 1 : 0, children: TABS.slice(i, i + perRow).map(tabButton) }))
+    out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 && !compact ? 1 : 0, children: TABS.slice(i, i + perRow).map(tabButton) }))
   out.push(t([span('─'.repeat(Math.max(0, cols)), C.dim)]))
   const headN = out.length
   if (tab !== bodyTab) {
@@ -1142,35 +1147,16 @@ function draw($: any, e: any) {
   const lvl = effortLevel()
   const hue = hex(EFFORTS[lvl - 1]?.hue ?? RGB.purple)
   const hot = lvl === 5 && blink()
-  const foot: any[] = [
-    t([span('─'.repeat(cols), C.dim)]),
-    Box({
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      children: [
-        t([
-          span(hot ? '◈ ' : '◆ ', hue),
-          span('EFFORT ', C.muted, { bold: true }),
-          lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hot ? C.pink : hue }) : span('sin dato', C.dim),
-          ...(effortPick ? [span(' fijado', C.muted)] : []),
-        ]),
-        t([span(lvl ? '▰'.repeat(lvl) : '', hue), span('▱'.repeat(5 - lvl), C.dim), span(lvl === 5 ? ' OVERDRIVE' : ` ${lvl}/5`, lvl === 5 ? hue : C.dim, { bold: lvl === 5 })]),
-      ],
-    }),
-  ]
-  if (e.surface === 'terminal' && Raster) {
-    foot.push(Raster({ key: 'effort', columns: cols, rows: 2, cells: effortCells(cols) }))
-    const { step } = effortGeom(cols)
-    const short = ['LOW', 'MED', 'HIGH', 'XHIGH', 'MAX']
-    foot.push(
+  const short = ['LOW', 'MED', 'HIGH', 'XHIGH', 'MAX']
+  const pickRow = (step: number, pad: number) =>
       Box({
         key: 'effort-picks',
         flexDirection: 'row',
-        paddingLeft: 3,
+        paddingLeft: pad,
         children: EFFORTS.map((x, i) =>
           Box({
             key: 'effbox-' + x.id,
-            width: i === 4 ? 6 : step,
+            width: i === 4 ? Math.max(step, 5) : step,
             backgroundColor: effortPick === x.id ? C.tabBg : undefined,
             children: [
               Button({
@@ -1187,12 +1173,43 @@ function draw($: any, e: any) {
             ],
           }),
         ),
+      })
+  const foot: any[] = [
+    t([span('─'.repeat(cols), C.dim)]),
+    Box({
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      children: [
+        t([
+          span(hot ? '◈ ' : '◆ ', hue),
+          span('EFFORT ', C.muted, { bold: true }),
+          lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hot ? C.pink : hue }) : span('sin dato', C.dim),
+          ...(effortPick ? [span(' fijado', C.muted)] : []),
+        ]),
+        t([span(lvl ? '▰'.repeat(lvl) : '', hue), span('▱'.repeat(5 - lvl), C.dim), span(lvl === 5 ? ' OVERDRIVE' : ` ${lvl}/5`, lvl === 5 ? hue : C.dim, { bold: lvl === 5 })]),
+      ],
+    }),
+  ]
+  if (!compact && e.surface === 'terminal' && Raster) {
+    foot.push(Raster({ key: 'effort', columns: cols, rows: 2, cells: effortCells(cols) }))
+    foot.push(pickRow(effortGeom(cols).step, 3))
+  }
+  if (compact)
+    foot.splice(
+      1,
+      foot.length,
+      Box({
+        flexDirection: 'row',
+        children: [
+          t([span('◆ ', hue), span('EFFORT ', C.muted, { bold: true }), lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hue }) : span('–', C.dim), span(effortPick ? ' fijado ' : ' ', C.muted)]),
+          pickRow(6, 1),
+        ],
       }),
     )
-  }
   const rows = e.props.scroll?.bodyRows || 0
   const footBox = Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot })
   if (!rows || e.props.placement !== 'dock') {
+    if (compact) return Box({ flexDirection: 'column', children: [...out.slice(0, headN), Box({ key: 'effort-top', flexDirection: 'column', marginTop: 0, children: foot.slice(1) }), ...out.slice(headN)] })
     return Box({ flexDirection: 'column', minHeight: rows || undefined, children: [...out, Box({ key: 'spacer', flexGrow: 1 }), footBox] })
   }
   const head = out.slice(0, headN)
