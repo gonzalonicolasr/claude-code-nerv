@@ -106,6 +106,7 @@ let cardHits: { key: string; top: number; bottom: number }[] = []
 let lastContent = 0
 let ramTotal = ''
 let effort: string | number | undefined
+let effortPick: string | undefined
 let settingsEffort = ''
 let effortFrom = 0
 let effortAt = 0
@@ -360,7 +361,7 @@ async function refreshLocal($: any) {
   const se = String(st?.effortLevel || '')
   if (se && se !== settingsEffort) {
     settingsEffort = se
-    setEffort(se)
+    if (!effortPick) setEffort(se)
   }
   if (home) {
     const log = await $.fs.read(`${home}/.local/state/claude-healthcheck.log`).catch(() => '')
@@ -662,12 +663,6 @@ const effortCells = (cols: number) => {
     if (charging && Math.abs(inner - fillK * segW) < 1.5) col = mix(col, 0xffffff, 0.7)
     return col
   })
-}
-
-const effortLabels = (cols: number) => {
-  const { step } = effortGeom(cols)
-  const short = ['LOW', 'MED', 'HIGH', 'XHIGH', 'MAX']
-  return short.map((n, i) => ({ text: (i === 0 ? '   ' : '') + n.padEnd(i === 4 ? 0 : step).slice(0, i === 4 ? 6 : step), seg: i }))
 }
 
 function draw($: any, e: any) {
@@ -1157,6 +1152,7 @@ function draw($: any, e: any) {
           span(hot ? '◈ ' : '◆ ', hue),
           span('EFFORT ', C.muted, { bold: true }),
           lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hot ? C.pink : hue }) : span('sin dato', C.dim),
+          ...(effortPick ? [span(' fijado', C.muted)] : []),
         ]),
         t([span(lvl ? '▰'.repeat(lvl) : '', hue), span('▱'.repeat(5 - lvl), C.dim), span(lvl === 5 ? ' OVERDRIVE' : ` ${lvl}/5`, lvl === 5 ? hue : C.dim, { bold: lvl === 5 })]),
       ],
@@ -1164,7 +1160,35 @@ function draw($: any, e: any) {
   ]
   if (e.surface === 'terminal' && Raster) {
     foot.push(Raster({ key: 'effort', columns: cols, rows: 2, cells: effortCells(cols) }))
-    foot.push(t(effortLabels(cols).map((l) => span(l.text, l.seg === lvl - 1 ? hex(EFFORTS[l.seg].hue) : C.dim, { bold: l.seg === lvl - 1 }))))
+    const { step } = effortGeom(cols)
+    const short = ['LOW', 'MED', 'HIGH', 'XHIGH', 'MAX']
+    foot.push(
+      Box({
+        key: 'effort-picks',
+        flexDirection: 'row',
+        paddingLeft: 3,
+        children: EFFORTS.map((x, i) =>
+          Box({
+            key: 'effbox-' + x.id,
+            width: i === 4 ? 6 : step,
+            backgroundColor: effortPick === x.id ? C.tabBg : undefined,
+            children: [
+              Button({
+                key: 'eff-' + x.id,
+                label: short[i],
+                plain: true,
+                dimColor: i !== lvl - 1,
+                onPress: () => {
+                  effortPick = effortPick === x.id ? undefined : x.id
+                  setEffort(effortPick || settingsEffort || effort)
+                  $.ui.invalidate('ui.render')
+                },
+              }),
+            ],
+          }),
+        ),
+      }),
+    )
   }
   const rows = e.props.scroll?.bodyRows || 0
   const footBox = Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot })
@@ -1796,6 +1820,7 @@ export function register(on: any) {
   })
 
   on('turn.step', async function* ($: any, e: any, next: any) {
+    if (!e.agentId && effortPick && e.effort !== undefined) return yield* next({ ...e, effort: effortPick })
     if (!e.agentId && e.effort !== undefined && e.effort !== effort) {
       setEffort(e.effort)
       $.ui.invalidate('ui.render')

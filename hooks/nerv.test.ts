@@ -178,3 +178,13 @@ test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', as
   await m.press({ key: 'ngate-classify' })
   expect(sent).toEqual(['off', 'gate promotion on', 'gate classify off'])
 })
+
+test('clickear un nivel del medidor fija ese effort y clickearlo de nuevo lo suelta', async ($) => {
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'eff-low' })
+  const fixed = JSON.stringify(await m.drawn())
+  expect(fixed).toContain('fijado')
+  expect(fixed).toContain(' LOW ')
+  await m.press({ key: 'eff-low' })
+  expect(JSON.stringify(await m.drawn())).not.toContain('fijado')
+})
