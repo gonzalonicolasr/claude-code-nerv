@@ -43,6 +43,7 @@ const TABS = [
   { id: 'hw', label: 'HW', hotkey: '3' },
   { id: 'crew', label: 'EQUIPO', hotkey: '4' },
   { id: 'forge', label: 'FORGE', hotkey: '5' },
+  { id: 'nodd', label: 'NODD', hotkey: '6' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -108,6 +109,7 @@ let settingsEffort = ''
 let effortFrom = 0
 let effortAt = 0
 let forge: any = undefined
+let nodd: any = undefined
 let forgeMissing = false
 let forgeDraft = ''
 const forgeGroup: Record<string, string> = {}
@@ -777,6 +779,7 @@ function draw($: any, e: any) {
     }),
   )
   const tabLabel = (x: (typeof TABS)[number]) => (tab === x.id ? `◆ ${x.label}` : x.label)
+  const tabsFit = TABS.reduce((n, x) => n + tabLabel(x).length + 4, 2) <= cols
   out.push(
     Box({
       flexDirection: 'row',
@@ -791,7 +794,7 @@ function draw($: any, e: any) {
             Button({
               key: 'tab-' + x.id,
               label: tabLabel(x),
-              hotkey: x.hotkey,
+              hotkey: tabsFit ? x.hotkey : undefined,
               plain: true,
               dimColor: tab !== x.id,
               onPress: () => {
@@ -800,6 +803,7 @@ function draw($: any, e: any) {
                 if (x.id === 'hw') refreshHw($)
                 if (x.id === 'crew') refreshCrew($)
                 if (x.id === 'forge') refreshForge($)
+                if (x.id === 'nodd') refreshNodd($)
                 $.ui.invalidate('ui.render')
               },
             }),
@@ -811,7 +815,7 @@ function draw($: any, e: any) {
   let used = 0
   const ruleParts: any[] = []
   for (const x of TABS) {
-    const n = tabLabel(x).length + 3 + (tab === x.id ? 2 : 0) + 1
+    const n = tabLabel(x).length + (tabsFit ? 3 : 0) + (tab === x.id ? 2 : 0) + 1
     ruleParts.push(span((tab === x.id ? '━' : '─').repeat(n - 1), tab === x.id ? C.purple : C.dim), span('─', C.dim))
     used += n
   }
@@ -1018,6 +1022,55 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
+
+  if (tab === 'nodd') {
+    if (!nodd) out.push(card('nodd-main', '◆ NODD', C.purple, [t([span('sin estado: cargá el mod nodd (CLAUDE_CODE_PLUGIN_DIRS)', C.muted)])]))
+    else {
+      const on = !!nodd.enabled
+      out.push(
+        card('nodd-main', '◆ NODD', on ? C.lime : C.purple, [
+          Box({
+            flexDirection: 'row',
+            children: [
+              chip('nodd-on', on ? '● PRENDIDO' : 'prender', on, C.lime, () => void noddCmd($, 'on')),
+              t([span(' ')]),
+              chip('nodd-off', !on ? '○ APAGADO' : 'apagar', !on, C.chipDim, () => void noddCmd($, 'off')),
+            ],
+          }),
+          t([span(on ? 'frena las tool calls que rompen el protocolo ODD' : 'apagado: no frena nada en ninguna sesión', C.dim)]),
+        ]),
+      )
+      const rows: any[] = []
+      for (const g of nodd.gates || []) {
+        const live = g.enabledInClaudeCode ?? g.enforcedInClaudeCode
+        rows.push(
+          Box({
+            flexDirection: 'row',
+            children: [
+              chip('ngate-' + g.id, g.enabled ? '● ' + g.id : '○ ' + g.id, !!g.enabled, live ? C.lime : C.chipDim, () => void noddCmd($, `gate ${g.id} ${g.enabled ? 'off' : 'on'}`)),
+              t([span(live ? '' : ' pendiente', C.amber)]),
+            ],
+          }),
+        )
+        rows.push(t([span('  ' + clip(GATE_INFO[g.id] || '', w - 6), C.dim)]))
+      }
+      out.push(scard('nodd-gates', '⛨ GATES · click prende/apaga', C.violet, rows, 12))
+      const d = nodd.declaration
+      out.push(
+        card('nodd-decl', '✎ DECLARACIÓN', C.purple, [
+          d ? t([span(clip(d.slug || '?', w - 22), C.text, { bold: true }), span(` · ${d.intent || '?'} · ${d.route || '?'}`, C.dim)]) : t([span('sin declarar en esta sesión', C.muted)]),
+        ]),
+      )
+      const r = nodd.lastRefusal
+      const c = nodd.counters || {}
+      out.push(
+        card('nodd-last', '✖ ÚLTIMO RECHAZO', r ? C.red : C.purple, [
+          r ? t([span(r.gate + ' ', C.red, { bold: true }), span(clip(String(r.reason || '').replace(/^nodd\/\w+: /, ''), w - 14), C.text)]) : t([span('ninguno', C.muted)]),
+          t([span(`${c.toolCalls || 0} calls · ${c.filesWritten || 0} escritos · ${c.refusals || 0} rechazos · ${c.delegations || 0} delegaciones`, C.dim)]),
+        ]),
+      )
+    }
+  }
 
   if (tab === 'hw') {
     if (!hw) out.push(t([span('leyendo sensores…', C.muted)]))
@@ -1251,6 +1304,31 @@ async function refreshForge($: any) {
     forge = JSON.parse(raw)
     forgeMissing = false
   } catch {}
+}
+
+async function refreshNodd($: any) {
+  if (!home) return
+  const raw = await $.fs.read(`${home}/.local/state/nodd/state.json`).catch(() => undefined)
+  try {
+    nodd = typeof raw === 'string' ? JSON.parse(raw) : undefined
+  } catch {
+    nodd = undefined
+  }
+}
+
+async function noddCmd($: any, args: string) {
+  await $.command.run({ command: 'nodd', args }).catch((err: any) => $.ui.toast(`nodd: ${clip(String(err?.message || err), 70)}`))
+  await refreshNodd($)
+  $.ui.invalidate('ui.render')
+}
+
+const GATE_INFO: Record<string, string> = {
+  authorize: 'frena escrituras si declaraste read-only',
+  classify: 'pide nodd_declare antes de escribir',
+  track: 'no deja tocar .nodd/ a mano',
+  delegate: 'pide delegar tras mucho trabajo propio',
+  evidence: 'tilda una tarea sólo si vio pasar el runner',
+  promotion: 'escala a /forge si el runner falla 2 veces',
 }
 
 async function forgeCmd($: any, args: string) {
@@ -1606,6 +1684,7 @@ export function register(on: any) {
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
+      if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     })
     $.clock.every(20000, () => {
@@ -1651,12 +1730,13 @@ export function register(on: any) {
       if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
       return { text: `NERV: unidad ${THEMES[themeId].label}` }
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : 'magi'
+    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd') {
+      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
       if (tab === 'crew') await refreshCrew($)
       if (tab === 'forge') await refreshForge($)
+      if (tab === 'nodd') await refreshNodd($)
     }
     quiet = false
     await $.store.set('quiet', false).catch(() => undefined)

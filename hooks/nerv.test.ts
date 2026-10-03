@@ -145,3 +145,36 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await m.press({ key: 'fstop' })
   expect(sent).toEqual(['profile turbo', 'model veredicto prolite/gpt-6-luna', 'effort explore high', 'profile zero:solo-gemini', 'cap 4', 'stop'])
 })
+
+test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const state = {
+    version: '0.1.0',
+    enabled: true,
+    gates: [
+      { id: 'classify', enabled: true, enforcedInClaudeCode: true },
+      { id: 'promotion', enabled: false, enforcedInClaudeCode: false },
+    ],
+    declaration: { slug: 'chau-txt', intent: 'change', route: 'inline' },
+    lastRefusal: { gate: 'classify', reason: 'nodd/classify: no hay declaración', at: '2026-10-03T05:00:00Z' },
+    counters: { toolCalls: 3, filesRead: 0, filesWritten: 1, delegations: 0, refusals: 1, agents: 0 },
+  }
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/nodd/state.json' ? JSON.stringify(state) : '' }))
+  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  const sent: string[] = []
+  on('command.run', { command: 'nodd' }, async (_$: any, e: any) => {
+    sent.push(e.args)
+    return {}
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'nodd' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  const drawn = JSON.stringify(await m.drawn())
+  for (const x of ['PRENDIDO', 'chau-txt', 'classify', 'pendiente', '3 calls']) expect(drawn).toContain(x)
+  await m.press({ key: 'nodd-off' })
+  await m.press({ key: 'ngate-promotion' })
+  await m.press({ key: 'ngate-classify' })
+  expect(sent).toEqual(['off', 'gate promotion on', 'gate classify off'])
+})
