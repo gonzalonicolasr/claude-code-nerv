@@ -73,6 +73,10 @@ let confettiUntil = 0
 const tasks = new Map<string, { kind: string; desc: string; start: number; end?: number; status?: string }>()
 const agentToUse = new Map<string, string>()
 let prs: any[] | undefined
+let ws: { days: Record<string, number>; repos: any[]; recent: any[] } | undefined
+let wsAt = 0
+let wsBusy = false
+let prsWide = false
 let prError = ''
 let ghMe = ''
 let commitDays: Record<string, number> = {}
@@ -206,15 +210,89 @@ async function ghEnv($: any, cwd: string) {
   return t?.exitCode === 0 ? { GH_TOKEN: t.stdout.trim() } : {}
 }
 
+const WS_SCAN = [
+  'while IFS= read -r r; do',
+  '  [ -e "$r/.git" ] || continue',
+  '  e=$(git -C "$r" config user.email 2>/dev/null)',
+  '  [ -n "$e" ] || continue',
+  '  n=${r%/}; n=${n##*/}',
+  '  git -C "$r" log --all --since=26.weeks --format="D %H %ad" --date=short --author="$e" 2>/dev/null',
+  '  git -C "$r" log --all -3 --since=26.weeks --format="C%x1f$n%x1f%ct%x1f%h%x1f%s%x1f$r" --author="$e" 2>/dev/null',
+  "done | awk '/^D /{ if (!seen[$2]++) c[$3]++; next } { print } END { for (d in c) printf \"D\\x1f%d\\x1f%s\\n\", c[d], d }'",
+].join('\n')
+
+const WS_STATE = 'while IFS= read -r r; do printf "%s\\x1f%s\\x1f%s\\n" "$r" "$(git -C "$r" rev-parse --abbrev-ref HEAD 2>/dev/null)" "$(git -C "$r" status --porcelain 2>/dev/null | wc -l)"; done'
+
+async function refreshWorkspace($: any) {
+  if (wsBusy || !home) return
+  wsBusy = true
+  try {
+    let roots = [`${home}/projects`]
+    try {
+      const cfg = JSON.parse(String((await $.fs.read(`${home}/.config/nerv/projects.json`).catch(() => '')) || '{}'))
+      if (Array.isArray(cfg.roots) && cfg.roots.length) roots = cfg.roots.map((r: string) => String(r).replace(/^~(?=\/|$)/, home))
+    } catch {}
+    const dirs: string[] = []
+    for (const root of roots) for (const d of ((await $.fs.list(root).catch(() => [])) as any[])) if (d.kind === 'dir') dirs.push(`${root}/${d.name}`)
+    const r = await $.process.run(['bash', '-c', WS_SCAN], { stdin: dirs.join('\n') + '\n', timeoutMs: 60000 }).catch(() => undefined)
+    if (r?.exitCode !== 0) return
+    const days: Record<string, number> = {}
+    const commits: any[] = []
+    const seen = new Set<string>()
+    for (const line of String(r.stdout).split('\n')) {
+      const f = line.split('\x1f')
+      if (f[0] === 'D') days[f[2]] = (days[f[2]] || 0) + Number(f[1])
+      else if (f[0] === 'C' && !seen.has(f[3])) {
+        seen.add(f[3])
+        commits.push({ repo: f[1], ct: Number(f[2]), h: f[3], s: f[4], path: f[5] })
+      }
+    }
+    commits.sort((a, b) => b.ct - a.ct)
+    const last = new Map<string, any>()
+    for (const c of commits) if (!last.has(c.repo)) last.set(c.repo, c)
+    const top = [...last.values()].slice(0, 6)
+    const st = await $.process.run(['bash', '-c', WS_STATE], { stdin: top.map((c) => c.path).join('\n') + '\n', timeoutMs: 30000 }).catch(() => undefined)
+    const info = new Map<string, string[]>()
+    for (const line of String(st?.stdout || '').split('\n')) if (line) info.set(line.split('\x1f')[0], line.split('\x1f'))
+    ws = {
+      days,
+      repos: top.map((c) => ({ name: c.repo, ct: c.ct, branch: info.get(c.path)?.[1] || '?', dirty: Number(info.get(c.path)?.[2] || 0) })),
+      recent: commits.slice(0, 8),
+    }
+    wsAt = now()
+    if (!gitInfo.ok) commitDays = ws.days
+    $.ui.invalidate('ui.render')
+  } finally {
+    wsBusy = false
+  }
+}
+
+async function refreshWidePRs($: any) {
+  const who = await $.process.run(['bash', '-c', 'gh auth status 2>&1 | grep -o "account [^ ]*" | cut -d" " -f2 | sort -u'], { timeoutMs: 10000 }).catch(() => undefined)
+  const users = String(who?.stdout || '').split('\n').filter(Boolean)
+  const all: any[] = []
+  for (const u of users) {
+    const t = await $.process.run(['gh', 'auth', 'token', '--user', u], { timeoutMs: 5000 }).catch(() => undefined)
+    if (t?.exitCode !== 0) continue
+    const r = await $.process
+      .run(['gh', 'search', 'prs', '--author', '@me', '--state', 'open', '--limit', '15', '--json', 'repository,number,title,url,isDraft'], { env: { GH_TOKEN: t.stdout.trim() }, timeoutMs: 20000 })
+      .catch(() => undefined)
+    if (r?.exitCode !== 0) continue
+    try {
+      for (const p of JSON.parse(r.stdout)) all.push({ ...p, repo: p.repository?.name || '' })
+    } catch {}
+  }
+  prs = all
+  prsWide = true
+  prError = users.length ? '' : 'sin cuentas de gh'
+}
+
 async function refreshPRs($: any) {
   const cwd = await $.session.cwd().catch(() => '')
   if (!cwd) return
   const env = await ghEnv($, cwd)
-  if (!env) {
-    prs = undefined
-    prError = 'sin repo de GitHub'
-    return
-  }
+  if (!env) return refreshWidePRs($)
+  prsWide = false
   if (!ghMe) {
     const me = await $.process.run(['gh', 'api', 'user', '-q', '.login'], { cwd, env, timeoutMs: 10000 }).catch(() => undefined)
     ghMe = me?.exitCode === 0 ? me.stdout.trim() : ''
@@ -261,6 +339,10 @@ async function refreshLocal($: any) {
     behind: ab ? Number(ab[2]) : 0,
     dirty,
     recent: rl?.exitCode === 0 ? rl.stdout.split('\n').filter(Boolean).map((l: string) => l.split('\x1f')) : [],
+  }
+  if (!gitInfo.ok) {
+    if (ws) commitDays = ws.days
+    if (now() - wsAt > 300000) void refreshWorkspace($)
   }
   if (home && paneId) {
     const raw = await $.fs.read(`${home}/.local/state/herdr-todos.json`).catch(() => '')
@@ -858,7 +940,18 @@ function draw($: any, e: any) {
   if (tab === 'git') {
     const g = gitInfo
     const gi: any[] = []
-    if (!g.ok) gi.push(t([span('no es un repo de git', C.muted)]))
+    if (!g.ok && !ws) gi.push(t([span('no es un repo de git · leyendo tus proyectos…', C.muted)]))
+    else if (!g.ok && ws)
+      for (const rp of ws.repos)
+        gi.push(
+          t([
+            span('⎇ ', C.purple),
+            span(clip(rp.name, Math.max(8, w - 26)), C.text, { bold: true }),
+            span(' ' + clip(rp.branch, 10), C.dim),
+            span(rp.dirty ? `  ● ${rp.dirty}` : '  ✔', rp.dirty ? C.orange : C.lime),
+            span(' ' + ago(now() - rp.ct * 1000).replace('hace ', ''), C.dim),
+          ]),
+        )
     else {
       gi.push(t([span('⎇ ', C.purple), span(clip(branch || '?', w - 20), C.text, { bold: true }), span(g.upstream ? `  → ${clip(g.upstream, 14)}` : '  sin upstream', C.dim)]))
       gi.push(
@@ -869,7 +962,7 @@ function draw($: any, e: any) {
         ]),
       )
     }
-    out.push(card('git-branch', '⎇ RAMA', C.purple, gi))
+    out.push(card('git-branch', g.ok ? '⎇ RAMA' : '⎇ PROYECTOS', C.purple, gi))
     const act: any[] = []
     if (e.surface === 'terminal' && Raster && Object.keys(commitDays).length) {
       const weeks = Math.max(4, Math.floor((w + 1) / 2))
@@ -880,6 +973,16 @@ function draw($: any, e: any) {
     }
     if (!act.length) act.push(t([span('sin commits en las últimas semanas', C.muted)]))
     out.push(card('git-heat', '▤ COMMITS', C.violet, act))
+    if (!g.ok && ws?.recent.length)
+      out.push(
+        scard(
+          'git-log',
+          '◷ ÚLTIMOS COMMITS',
+          C.purple,
+          ws.recent.map((c: any) => t([span(clip(c.repo, 14) + ' ', C.orange), span(clip(c.s || '', w - 24), C.text), span(' ' + ago(now() - c.ct * 1000).replace('hace ', ''), C.dim)])),
+          6,
+        ),
+      )
     if (g.recent.length)
       out.push(
         scard(
@@ -904,14 +1007,14 @@ function draw($: any, e: any) {
         const who = p.author?.login && p.author.login !== ghMe ? ` @${p.author.login}` : ''
         prRows.push(
           Box({
-            key: 'prr-' + p.number,
+            key: 'prr-' + (p.repo || '') + p.number,
             flexDirection: 'row',
-            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + p.number, href: p.url, label: clip(`#${p.number} ${p.title}${who}`, w - 5) })],
+            children: [t([span(rv[0] + ' ', rv[1]), span(cic[0] + ' ', cic[1])]), Link({ key: 'pr-' + (p.repo || '') + p.number, href: p.url, label: clip(`${p.repo ? p.repo + ' ' : ''}#${p.number} ${p.title}${who}`, w - 5) })],
           }),
         )
       }
     const counts = prs?.length ? ` · ${prs.length} abiertas` : ''
-    out.push(scard('prs', `⎇ PRs${counts}${branch ? ' · ' + clip(branch, w - 24) : ''}`, C.violet, prRows, 8))
+    out.push(scard('prs', `⎇ ${prsWide ? 'TUS PRs' : 'PRs'}${counts}${!prsWide && branch ? ' · ' + clip(branch, w - 24) : ''}`, C.violet, prRows, 8))
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })

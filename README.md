@@ -29,6 +29,11 @@ abiertas y lo que pliegues queda guardado).
     días seguidos y los commits de hoy.
   - **Últimos commits** y las **PRs abiertas del repo**, con su estado de review y de checks, como
     links.
+  - **Fuera de un repo** (por ejemplo, la sesión en tu home) junta todos tus proyectos: los más
+    recientes con su rama y cambios, el mapa de calor sumando todos los repos (cada commit cuenta una
+    vez aunque esté en varios clones, y en cada repo vale su propia identidad de git), los últimos
+    commits y tus PRs abiertas en todas tus cuentas de `gh`. Escanea `~/projects`, o las carpetas que
+    pongas en `~/.config/nerv/projects.json` como `{ "roots": ["~/projects", "~/otra"] }`.
 - **3 · HW:** GPU, VRAM, CPU y RAM con un gráfico animado, periféricos, monitores y máquinas
   secundarias.
 - **4 · EQUIPO:** tus sesiones de [herdr](https://herdr.dev), con las que te necesitan primero.
