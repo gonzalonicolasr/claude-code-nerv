@@ -49,6 +49,7 @@ const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
 
 let quiet = false
+let placedOnce = false
 let paneOpen = false
 let tab = 'magi'
 let frame = 0
@@ -779,48 +780,36 @@ function draw($: any, e: any) {
     }),
   )
   const tabLabel = (x: (typeof TABS)[number]) => (tab === x.id ? `◆ ${x.label}` : x.label)
-  const tabsFit = TABS.reduce((n, x) => n + tabLabel(x).length + 4, 2) <= cols
-  out.push(
+  const perRow = 3
+  const cellW = Math.floor((cols - (perRow - 1)) / perRow)
+  const tabButton = (x: (typeof TABS)[number]) =>
     Box({
-      flexDirection: 'row',
-      columnGap: 1,
-      marginTop: 1,
-      children: TABS.map((x) =>
-        Box({
-          key: 'tabbox-' + x.id,
-          paddingX: tab === x.id ? 1 : 0,
-          backgroundColor: tab === x.id ? C.tabBg : undefined,
-          children: [
-            Button({
-              key: 'tab-' + x.id,
-              label: tabLabel(x),
-              hotkey: tabsFit ? x.hotkey : undefined,
-              plain: true,
-              dimColor: tab !== x.id,
-              onPress: () => {
-                tab = x.id
-                $.store.set('tab', tab).catch(() => undefined)
-                if (x.id === 'hw') refreshHw($)
-                if (x.id === 'crew') refreshCrew($)
-                if (x.id === 'forge') refreshForge($)
-                if (x.id === 'nodd') refreshNodd($)
-                $.ui.invalidate('ui.render')
-              },
-            }),
-          ],
+      key: 'tabbox-' + x.id,
+      width: cellW,
+      justifyContent: 'center',
+      backgroundColor: tab === x.id ? C.tabBg : undefined,
+      children: [
+        Button({
+          key: 'tab-' + x.id,
+          label: tabLabel(x),
+          hotkey: x.hotkey,
+          plain: true,
+          dimColor: tab !== x.id,
+          onPress: () => {
+            tab = x.id
+            $.store.set('tab', tab).catch(() => undefined)
+            if (x.id === 'hw') refreshHw($)
+            if (x.id === 'crew') refreshCrew($)
+            if (x.id === 'forge') refreshForge($)
+            if (x.id === 'nodd') refreshNodd($)
+            $.ui.invalidate('ui.render')
+          },
         }),
-      ),
-    }),
-  )
-  let used = 0
-  const ruleParts: any[] = []
-  for (const x of TABS) {
-    const n = tabLabel(x).length + (tabsFit ? 3 : 0) + (tab === x.id ? 2 : 0) + 1
-    ruleParts.push(span((tab === x.id ? '━' : '─').repeat(n - 1), tab === x.id ? C.purple : C.dim), span('─', C.dim))
-    used += n
-  }
-  ruleParts.push(span('─'.repeat(Math.max(0, cols - used)), C.dim))
-  out.push(t(ruleParts))
+      ],
+    })
+  for (let i = 0; i < TABS.length; i += perRow)
+    out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 ? 1 : 0, children: TABS.slice(i, i + perRow).map(tabButton) }))
+  out.push(t([span('─'.repeat(Math.max(0, cols)), C.dim)]))
   const headN = out.length
   if (tab !== bodyTab) {
     bodyTab = tab
@@ -1032,9 +1021,9 @@ function draw($: any, e: any) {
           Box({
             flexDirection: 'row',
             children: [
-              chip('nodd-on', on ? '● PRENDIDO' : 'prender', on, C.lime, () => void noddCmd($, 'on')),
+              chip('nodd-on', on ? '● PRENDIDO' : 'prender', on, C.tabBg, () => void noddCmd($, 'on')),
               t([span(' ')]),
-              chip('nodd-off', !on ? '○ APAGADO' : 'apagar', !on, C.chipDim, () => void noddCmd($, 'off')),
+              chip('nodd-off', !on ? '○ APAGADO' : 'apagar', !on, C.tabBg, () => void noddCmd($, 'off')),
             ],
           }),
           t([span(on ? 'frena las tool calls que rompen el protocolo ODD' : 'apagado: no frena nada en ninguna sesión', C.dim)]),
@@ -1043,12 +1032,14 @@ function draw($: any, e: any) {
       const rows: any[] = []
       for (const g of nodd.gates || []) {
         const live = g.enabledInClaudeCode ?? g.enforcedInClaudeCode
+        const state = !live ? ['pendiente', C.amber] : !g.enabled ? ['apagado', C.dim] : on ? ['aplica', C.lime] : ['en espera', C.muted]
         rows.push(
           Box({
+            key: 'ngrow-' + g.id,
             flexDirection: 'row',
             children: [
-              chip('ngate-' + g.id, g.enabled ? '● ' + g.id : '○ ' + g.id, !!g.enabled, live ? C.lime : C.chipDim, () => void noddCmd($, `gate ${g.id} ${g.enabled ? 'off' : 'on'}`)),
-              t([span(live ? '' : ' pendiente', C.amber)]),
+              chip('ngate-' + g.id, g.enabled ? '◉ ON ' : '○ OFF', !!g.enabled, C.tabBg, () => void noddCmd($, `gate ${g.id} ${g.enabled ? 'off' : 'on'}`)),
+              t([span(' ' + g.id, g.enabled ? C.text : C.muted, { bold: true }), span(' · ' + state[0], state[1])]),
             ],
           }),
         )
@@ -1653,6 +1644,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
 async function openPane($: any) {
   const r = await $.ui.open({ id: PANE, title: 'NERV', columns: 46 }).catch(() => undefined)
   paneOpen = !!r?.isPlaced
+  if (paneOpen) placedOnce = true
   return r
 }
 
@@ -1680,6 +1672,7 @@ export function register(on: any) {
     if (tab === 'forge') refreshForge($)
     $.clock.every(125, () => {
       frame++
+      if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
