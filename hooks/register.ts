@@ -1380,7 +1380,11 @@ const FORGE_STATUS: Record<string, [string, string]> = {
 
 const tok = (n: number) => (!n ? '0' : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n))
 const bare = (id: string) => String(id || '').replace(/^[^/]+\//, '')
-const nice = (id: string) => forge?.labels?.[id] || bare(id)
+const claudeName = (id: string) => {
+  const m = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d))?(?:-\d{8})?$/.exec(id)
+  return m ? `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? '.' + m[3] : ''}` : id
+}
+const nice = (id: string) => forge?.labels?.[id] || claudeName(bare(id))
 const FACTORY_ORDER = ['turbo', 'barato', 'equilibrado', 'calidad', 'solo-claude', 'openai', 'gemini', 'open-source']
 const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal: 'min', low: 'low', medium: 'med', high: 'high', xhigh: 'xhigh' }
 const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')

@@ -89,7 +89,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
     effortNotes: { explore: '', plan: '', build: '', veredicto: '' },
     labels: { 'ag3/gemini-3.7-flash-high': 'Gemini 3.7 Flash', 'prolite/gpt-6-luna': 'GPT 6.0 Luna' },
     groupLabels: { claude: 'Claude Code (tu plan)', ag3: 'ag3 · Gemini', prolite: 'prolite · GPT' },
-    models: { explore: 'ag3/gemini-3.7-flash-high', plan: 'ag3/gemini-3.7-flash-high', build: 'ag3/gemini-3.7-flash-high', veredicto: 'prolite/gpt-5.6-terra' },
+    models: { explore: 'ag3/gemini-3.7-flash-high', plan: 'ag3/gemini-3.7-flash-high', build: 'personal/claude-sonnet-5-5', veredicto: 'prolite/gpt-5.6-terra' },
     mode: 'automatic',
     cap: 3,
     catalog: { claude: ['haiku', 'sonnet', 'opus'], ag3: ['ag3/gemini-3.7-flash-high'], prolite: ['prolite/gpt-5.6-terra', 'prolite/gpt-6-luna'] },
@@ -122,7 +122,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await $.command.run({ command: 'nerv', args: 'forge' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   const drawn = JSON.stringify(await m.drawn())
-  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash']) expect(drawn).toContain(s)
+  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash', 'Claude Sonnet 5.5']) expect(drawn).toContain(s)
   await m.press({ key: 'profile-turbo' })
   expect(drawn).not.toContain('ddp-fmodel-veredicto-')
   await m.press({ key: 'ddh-fmodel-veredicto' })
