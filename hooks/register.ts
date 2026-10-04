@@ -730,12 +730,12 @@ function draw($: any, e: any) {
   const out: any[] = []
   const alert = battery()
   const ink = C.ink
-  const magi = ['MELCHIOR·1', 'BALTHASAR·2', 'CASPER·3']
+  const magi = ['メルキオール', 'バルタザール', 'カスパー']
   const vote = (i: number) => {
-    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: ink, bg: blink() ? C.red : C.pink }
-    if (working && Math.floor(frame / 3) % 3 === i) return { word: '審議', fg: ink, bg: C.lime }
-    if (working) return { word: '待機', fg: C.purple, bg: C.chip }
-    return { word: '承認', fg: C.muted, bg: C.chipDim }
+    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: blink() ? C.red : C.pink, bg: C.chipDim, on: true }
+    if (working && Math.floor(frame / 6) % 3 === i) return { word: '審議', fg: C.lime, bg: C.chipDim, on: true }
+    if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
+    return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
   out.push(
     Box({
@@ -749,7 +749,7 @@ function draw($: any, e: any) {
           span(' ⟋ MAGI', C.dim),
         ]),
         t([
-          ...(compact ? [0, 1, 2].map((i) => span(` ${'MBC'[i]}·${vote(i).word} `, vote(i).fg, { backgroundColor: vote(i).bg })) : []),
+          ...(compact ? [0, 1, 2].map((i) => span(` ${'メバカ'[i]}·${vote(i).word} `, vote(i).fg, { bold: vote(i).on })) : []),
           span(compact ? ' ' : ''),
           working
             ? span(` ${SPIN[frame % 4]} OPERANDO `, ink, { bold: true, backgroundColor: C.lime })
@@ -773,7 +773,7 @@ function draw($: any, e: any) {
           flexDirection: 'column',
           alignItems: 'center',
           backgroundColor: v.bg,
-          children: [t([span(clip(name, cw), v.fg, { bold: v.bg === C.lime })], v.fg), t([span(v.word, v.fg, { bold: true })], v.fg)],
+          children: [t([span(name, v.on ? v.fg : C.muted, { bold: v.on })], v.fg), t([span(v.on ? `◆ ${v.word}` : v.word, v.fg, { bold: v.on })], v.fg)],
         })
       }),
     }),

@@ -44,7 +44,7 @@ test('la barra dibuja la tríada MAGI, las pestañas y el medidor de effort abaj
     props: { title: 'NERV', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 40, contentRows: 40 }, view: {} },
   })
   const text = JSON.stringify(await m.drawn())
-  expect(text).toContain('MELCHIOR')
+  expect(text).toContain('メルキオール')
   expect(text).toContain('EFFORT')
   expect(text).toContain('MAGI')
   expect(await m.find({ key: 'effort-foot' })).toBeDefined()
