@@ -146,6 +146,77 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   expect(sent).toEqual(['profile turbo', 'model veredicto prolite/gpt-6-luna', 'effort explore high', 'profile zero:solo-gemini', 'cap 4', 'stop'])
 })
 
+test('FORGE separa fábrica, míos y zero-pi, y sus botones crean, restauran y borran perfiles', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const state: any = {
+    profile: 'barato',
+    profiles: {
+      barato: { builtin: true, modified: true, source: 'forge' },
+      turbo: { builtin: true, modified: false, source: 'forge' },
+      mio: { builtin: false, modified: false, source: 'forge' },
+      'zero:solo-claude': { builtin: false, modified: false, source: 'zero-pi' },
+    },
+    efforts: {},
+    effortLevels: ['auto', 'low', 'high'],
+    effortNotes: {},
+    models: { explore: 'ag3/gemini-3.7-flash-high', plan: 'opus', build: 'opus', veredicto: 'opus' },
+    phaseOrder: ['explore', 'plan', 'build', 'veredicto'],
+    mode: 'automatic',
+    cap: 3,
+    catalog: { claude: ['haiku', 'sonnet', 'opus', 'fable'] },
+    run: null,
+  }
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state.json' ? JSON.stringify(state) : '' }))
+  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  const asked: string[] = []
+  const answers = ['Prueba X', 'Cancelar', 'Borrar']
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_$: any, e: any) => {
+    asked.push(e.questions[0].question)
+    const a = answers.shift()
+    return { result: { questions: e.questions, answers: { [e.questions[0].question]: a } } }
+  })
+  const sent: string[] = []
+  on('command.run', { command: 'forge' }, async (_$: any, e: any) => {
+    sent.push(e.args)
+    return { text: 'ok' }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'forge' })
+  for (const props of [PANE_PROPS, { ...PANE_PROPS, placement: 'band', scroll: { offset: 0, bodyRows: 0, contentRows: 0 } }]) {
+    const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
+    const drawn = JSON.stringify(await m.drawn())
+    const at = (x: string) => drawn.indexOf(x)
+    for (const x of ['FÁBRICA', 'MÍOS', 'ZERO-PI · UN MODELO', '★ modificado', '● barato ★', '"label":"turbo"', '+ nuevo', '↺ restaurar']) expect(drawn).toContain(x)
+    expect(at('FÁBRICA') < at('MÍOS') && at('MÍOS') < at('ZERO-PI')).toBe(true)
+    expect(at('"label":"mio"') > at('MÍOS') && at('"label":"mio"') < at('ZERO-PI')).toBe(true)
+    expect(drawn).not.toContain('fp-delete')
+    await m.unmount()
+  }
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'fp-reset' })
+  await m.press({ key: 'fp-new' })
+  await m.press({ key: 'fp-new' })
+  state.profile = 'mio'
+  await m.press({ key: 'profile-mio' })
+  const mine = JSON.stringify(await m.drawn())
+  expect(mine).toContain('perfil tuyo')
+  expect(mine).not.toContain('fp-reset')
+  await m.press({ key: 'fp-delete' })
+  expect(asked.length).toBe(3)
+  expect(asked[2]).toContain('¿Borrar el perfil mio?')
+  expect(sent).toEqual(['profile reset barato', 'profile new Prueba X', 'profile mio', 'profile delete mio'])
+  state.profile = 'zero:solo-claude'
+  await m.press({ key: 'profile-zero:solo-claude' })
+  expect(JSON.stringify(await m.drawn())).toContain('~/.pi/zero.json')
+  state.profile = 'custom'
+  await m.press({ key: 'profile-turbo' })
+  const none = JSON.stringify(await m.drawn())
+  expect(none).toContain('sin perfil')
+  expect(none).toContain('fp-new-top')
+})
+
 test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', async ($, on) => {
   mock.env(on, { HOME: '/h' })
   mock.store(on)

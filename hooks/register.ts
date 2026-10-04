@@ -1363,7 +1363,7 @@ const GATE_INFO: Record<string, string> = {
   promotion: 'escala a /forge si el runner falla 2 veces',
 }
 
-async function viaInbox($: any, mod: string, args: string): Promise<boolean> {
+async function viaInbox($: any, mod: string, args: string): Promise<string | false> {
   const sid = home ? await $.session.id().catch(() => '') : ''
   if (!sid) return false
   const path = `${home}/.local/state/${mod}/inbox-${sid}.json`
@@ -1377,16 +1377,36 @@ async function viaInbox($: any, mod: string, args: string): Promise<boolean> {
     await $.clock.sleep(100)
     try {
       const back = JSON.parse(String((await $.fs.read(path).catch(() => '')) || '{}'))
-      if (back.id === id && back.done) return true
+      if (back.id === id && back.done) return String(back.text ?? '')
     } catch {}
   }
   return false
 }
 
-async function forgeCmd($: any, args: string) {
-  if (!(await viaInbox($, 'forge', args))) await $.command.run({ command: 'forge', args }).catch((err: any) => $.ui.toast(`forge: ${clip(String(err?.message || err), 70)}`))
+async function forgeCmd($: any, args: string, announce = false) {
+  let text = await viaInbox($, 'forge', args)
+  if (text === false) text = String(((await $.command.run({ command: 'forge', args }).catch((err: any) => ({ text: `⚠ ${err?.message || err}` }))) as any)?.text || '')
+  if (text && (announce || /^(⚠|no se)/.test(text))) $.ui.toast(`forge: ${clip(text, 70)}`)
   await refreshForge($)
   $.ui.invalidate('ui.render')
+}
+
+async function askProfileName($: any) {
+  const taken = Object.keys(forge?.profiles || {})
+  const base = String(forge?.profile || 'custom').replace(/^zero:/, '')
+  let suggestion = base === 'custom' ? 'mio' : `${base}-mio`
+  for (let i = 2; taken.includes(suggestion); i++) suggestion = `${base === 'custom' ? 'mio' : `${base}-mio`}-${i}`
+  const pick = await $.ui
+    .ask('¿Cómo se llama el perfil nuevo? Copia los modelos y efforts de ahora. Escribí el nombre en «Other» o usá el sugerido.', { options: [suggestion, 'Cancelar'], header: 'forge' })
+    .catch(() => 'Cancelar')
+  const name = String(pick || '').trim()
+  if (!name || name === 'Cancelar') return
+  await forgeCmd($, `profile new ${name}`, true)
+}
+
+async function confirmDelete($: any, name: string) {
+  const pick = await $.ui.ask(`¿Borrar el perfil ${name}? No se puede deshacer.`, { options: ['Borrar', 'Cancelar'], header: 'forge' }).catch(() => 'Cancelar')
+  if (pick === 'Borrar') await forgeCmd($, `profile delete ${name}`, true)
 }
 
 const FORGE_STATUS: Record<string, [string, string]> = {
@@ -1510,8 +1530,9 @@ function drawForge($: any, e: any, out: any[], h: any) {
   const all = Object.entries<any>(forge.profiles || {})
   const broken = (pr: any) => ['explore', 'plan', 'build', 'veredicto'].some((f) => /^(plus|oc)\//.test(String(pr?.[f] || pr?.models?.[f] || '')))
   const sections: { title: string; names: string[] }[] = []
-  const factory = all.filter(([, p]) => p.source !== 'zero-pi').map(([n]) => n)
+  const factory = all.filter(([, p]) => p.source !== 'zero-pi' && p.builtin).map(([n]) => n)
   sections.push({ title: 'FÁBRICA', names: [...FACTORY_ORDER.filter((n) => factory.includes(n)), ...factory.filter((n) => !FACTORY_ORDER.includes(n)).sort()] })
+  sections.push({ title: 'MÍOS', names: all.filter(([, p]) => p.source !== 'zero-pi' && !p.builtin).map(([n]) => n).sort() })
   const zero = all.filter(([, p]) => p.source === 'zero-pi').map(([n]) => n)
   const zgroup = (n: string) => {
     const k = n.replace(/^zero:/, '')
@@ -1525,8 +1546,20 @@ function drawForge($: any, e: any, out: any[], h: any) {
     if (names.length) sections.push({ title: g, names })
   }
   const profileRows: any[] = []
+  const curName = String(forge.profile || 'custom')
+  const cur = forge.profiles?.[curName]
+  const bar = (left: any[], right?: any) => Box({ key: 'fp-bar', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 1, children: [t(left), ...(right ? [right] : [])] })
+  if (!cur) profileRows.push(bar([span('sin perfil', C.amber, { bold: true }), span(' · no se guarda', C.dim)], chip('fp-new-top', '+ guardar', false, C.tabBg, () => void askProfileName($))))
+  else if (cur.source === 'zero-pi') profileRows.push(bar([span('cambios → ', C.dim), span('~/.pi/zero.json', C.muted)]))
+  else if (cur.builtin && cur.modified) profileRows.push(bar([span('★ modificado', C.amber, { bold: true })], chip('fp-reset', '↺ restaurar', false, C.tabBg, () => void forgeCmd($, `profile reset ${curName}`, true))))
+  else if (!cur.builtin) profileRows.push(bar([span('perfil tuyo', C.dim)], chip('fp-delete', '🗑 borrar', false, C.tabBg, () => void confirmDelete($, curName))))
   for (const sec of sections) {
-    profileRows.push(t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]))
+    profileRows.push(
+      sec.title === 'MÍOS'
+        ? Box({ key: 'psec-head-mios', flexDirection: 'row', justifyContent: 'space-between', children: [t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]), chip('fp-new', '+ nuevo', false, C.tabBg, () => void askProfileName($))] })
+        : t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]),
+    )
+    if (sec.title === 'MÍOS' && !sec.names.length) profileRows.push(t([span('  ninguno: + nuevo guarda la config actual', C.dim)]))
     const colW = Math.floor((w - 1) / 2)
     for (let i = 0; i < sec.names.length; i += 2) {
       profileRows.push(
@@ -1536,6 +1569,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
           columnGap: 1,
           children: sec.names.slice(i, i + 2).map((n) => {
             const bad = broken(forge.profiles[n])
+            const mod = !!forge.profiles[n]?.modified
             const on = forge.profile === n
             const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/-/g, ' ')
             return Box({
@@ -1543,7 +1577,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
               width: colW,
               paddingX: 1,
               backgroundColor: on ? C.tabBg : C.chipDim,
-              children: [Button({ key: 'profile-' + n, label: clip((on ? '● ' : '') + label + (bad ? ' ⚠' : ''), colW - 2), plain: true, dimColor: !on, onPress: () => void forgeCmd($, `profile ${n}`) })],
+              children: [Button({ key: 'profile-' + n, label: clip((on ? '● ' : '') + label + (mod ? ' ★' : '') + (bad ? ' ⚠' : ''), colW - 2), plain: true, dimColor: !on, onPress: () => void forgeCmd($, `profile ${n}`) })],
             })
           }),
         }),
