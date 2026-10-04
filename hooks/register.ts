@@ -1559,7 +1559,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
         ? Box({ key: 'psec-head-mios', flexDirection: 'row', justifyContent: 'space-between', children: [t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]), chip('fp-new', '+ nuevo', false, C.tabBg, () => void askProfileName($))] })
         : t([span(sec.title, C.cyan, { bold: true }), span(` · ${sec.names.length}`, C.dim)]),
     )
-    if (sec.title === 'MÍOS' && !sec.names.length) profileRows.push(t([span('  ninguno: + nuevo guarda la config actual', C.dim)]))
+    if (sec.title === 'MÍOS' && !sec.names.length) profileRows.push(t([span('  ninguno todavía · usá + nuevo', C.dim)]))
     const colW = Math.floor((w - 1) / 2)
     for (let i = 0; i < sec.names.length; i += 2) {
       profileRows.push(
