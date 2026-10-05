@@ -768,6 +768,7 @@ function draw($: any, e: any) {
         else folded.add(key)
         $.ui.invalidate('ui.render')
         await $.store.set('folded', [...folded]).catch(() => undefined)
+        await savePrefs($, { folded: [...folded] })
       },
     })
   const titleRow = (key: string, parts: any[], color: string) =>
@@ -997,6 +998,7 @@ function draw($: any, e: any) {
             onPress: async () => {
               quiet = true
               await $.store.set('quiet', true).catch(() => undefined)
+              await savePrefs($, { quiet: true })
               await $.ui.close({ id: PANE }).catch(() => undefined)
               paneOpen = false
             },
@@ -1255,6 +1257,7 @@ function draw($: any, e: any) {
                   effortPick = effortPick === x.id ? undefined : x.id
                   setEffort(effortPick || settingsEffort || effort)
                   $.ui.invalidate('ui.render')
+                  void savePrefs($, { effort: effortPick ?? null })
                 },
               }),
             ],
@@ -1399,9 +1402,57 @@ function measure(el: any, width: number): number {
   return h + border + padY + Math.max(0, marY)
 }
 
+const prefsPath = () => `${home}/.local/state/nerv/prefs.json`
+let prefsStamp = -1
+
+async function savePrefs($: any, patch: Record<string, unknown>) {
+  if (!home) return
+  const cur = JSON.parse((await $.fs.read(prefsPath()).catch(() => '')) || '{}')
+  await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
+  await $.fs.write(prefsPath(), JSON.stringify({ ...cur, ...patch }) + '\n').catch(() => undefined)
+  prefsStamp = (await $.fs.stat(prefsPath()).catch(() => undefined))?.mtimeMs ?? prefsStamp
+}
+
+async function syncPrefs($: any) {
+  if (!home) return
+  const st = await $.fs.stat(prefsPath()).catch(() => undefined)
+  if (!st || st.mtimeMs === prefsStamp) return
+  prefsStamp = st.mtimeMs
+  let p: any
+  try {
+    p = JSON.parse((await $.fs.read(prefsPath()).catch(() => '')) || '{}')
+  } catch {
+    return
+  }
+  if (typeof p.theme === 'string' && p.theme !== themeId) applyTheme(p.theme)
+  if (Array.isArray(p.folded)) {
+    folded.clear()
+    for (const k of p.folded) folded.add(String(k))
+  }
+  if ('effort' in p) {
+    const pick = typeof p.effort === 'string' ? p.effort : undefined
+    if (pick !== effortPick) {
+      effortPick = pick
+      setEffort(effortPick || settingsEffort || effort)
+    }
+  }
+  if (typeof p.quiet === 'boolean' && p.quiet !== quiet) {
+    quiet = p.quiet
+    if (quiet) {
+      await $.ui.close({ id: PANE }).catch(() => undefined)
+      paneOpen = false
+    } else {
+      await refreshLocal($)
+      await openPane($)
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
 async function setTheme($: any, id: string) {
   if (!applyTheme(id)) return false
   await $.store.set('theme', id).catch(() => undefined)
+  await savePrefs($, { theme: themeId })
   if (home) {
     await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
     const { label, ...colors } = THEMES[themeId]
@@ -1845,6 +1896,7 @@ export function register(on: any) {
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
+    await syncPrefs($)
     const unit = home ? await $.fs.read(`${home}/.config/systemd/user/jcode-rail.service`).catch(() => '') : ''
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
@@ -1871,6 +1923,9 @@ export function register(on: any) {
       if (quiet || !paneOpen || tab !== 'magi' || folded.has('sync') || !gauges.length) return
       for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
     })
+    $.clock.every(1000, () => {
+      syncPrefs($)
+    })
     $.clock.every(20000, () => {
       if (!quiet) refreshLocal($)
     })
@@ -1894,6 +1949,7 @@ export function register(on: any) {
     if (arg === 'quiet' || arg === 'off') {
       quiet = true
       await $.store.set('quiet', true).catch(() => undefined)
+      await savePrefs($, { quiet: true })
       await $.ui.close({ id: PANE }).catch(() => undefined)
       paneOpen = false
       $.ui.invalidate('ui.render')
@@ -1901,7 +1957,7 @@ export function register(on: any) {
     }
     if (arg === 'debug') {
       const panes = await $.ui.panes().catch((err: any) => String(err))
-      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel() }
+      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet }
       return { text: 'nerv debug: ' + JSON.stringify(st) + ' panes=' + JSON.stringify(panes) }
     }
     if (arg === 'prs') {
@@ -1924,6 +1980,7 @@ export function register(on: any) {
     }
     quiet = false
     await $.store.set('quiet', false).catch(() => undefined)
+    await savePrefs($, { quiet: false })
     await refreshLocal($)
     const r = await openPane($)
     $.ui.invalidate('ui.render')
