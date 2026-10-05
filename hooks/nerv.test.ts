@@ -260,3 +260,12 @@ test('clickear un nivel del medidor fija ese effort y clickearlo de nuevo lo sue
   await m.press({ key: 'eff-low' })
   expect(JSON.stringify(await m.drawn())).not.toContain('fijado')
 })
+
+test('el cierre del turno y los avisos de recarga se dibujan cortos', async ($) => {
+  const turn: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'TurnDuration', requestId: 't', props: { word: 'Churned', durationMs: 188000 } })
+  const t = JSON.stringify(await turn.drawn())
+  expect(t).toContain('完了')
+  expect(t).toContain('3 min 8 s')
+  const note: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'InfoNotice', requestId: 'n', props: { text: 'forge: plugin.json changed — reloaded (11 hooks: session.start)', command: null } })
+  expect(JSON.stringify(await note.drawn())).toContain('↻ forge recargado')
+})

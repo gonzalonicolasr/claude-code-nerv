@@ -123,6 +123,13 @@ const clip = (s: string, n: number) => {
   s = String(s ?? '')
   return s.length > n ? s.slice(0, Math.max(0, n - 1)) + '…' : s
 }
+const took = (ms: number) => {
+  const sec = Math.max(0, Math.round(ms / 1000))
+  if (sec < 60) return `${sec} s`
+  const min = Math.floor(sec / 60)
+  return min < 60 ? `${min} min ${sec % 60} s` : `${Math.floor(min / 60)} h ${min % 60} min`
+}
+
 const mmss = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
   const m = Math.floor(s / 60)
@@ -2013,6 +2020,19 @@ export function register(on: any) {
     } catch {
       return rest
     }
+  })
+
+  on('ui.render', { component: 'TurnDuration' }, async ($: any, e: any, next: any) => {
+    if (quiet || e.surface !== 'terminal' || typeof e.props.durationMs !== 'number') return next(e)
+    const { Text } = $.ui.resolve(e)
+    return Text({ wrap: 'truncate', children: [Text({ color: C.purple, children: ['◆ '] }), Text({ color: C.muted, children: ['完了'] }), Text({ color: C.dim, children: [` · ${took(e.props.durationMs)}`] })] })
+  })
+
+  on('ui.render', { component: 'InfoNotice' }, async ($: any, e: any, next: any) => {
+    const m = /^([\w.-]+): (?:plugin\.json changed\s*[—-]\s*)?reloaded\b/.exec(String(e.props.text || ''))
+    if (quiet || !m || e.surface !== 'terminal') return next(e)
+    const { Text } = $.ui.resolve(e)
+    return Text({ wrap: 'truncate', color: C.dim, children: [`↻ ${m[1]} recargado`] })
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any, next: any) => {
