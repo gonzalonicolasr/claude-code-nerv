@@ -63,6 +63,7 @@ let home = ''
 let paneId = ''
 let sessionId = ''
 let usage: any = undefined
+let account = ''
 let samples: { t: number; pct: number }[] = []
 let activity: { tool: string; label: string; start: number } | undefined
 let lastProgress = 0
@@ -848,7 +849,7 @@ function draw($: any, e: any) {
       syncRows.push(t([span(blink() ? '▲ ACTIVE TIME REMAINING' : '△ ACTIVE TIME REMAINING', C.red, { bold: true })]))
       syncRows.push(t([span(rem ? `  ~${mmss(rem)} al ritmo actual` : '  cable umbilical cortado', C.pink)]))
     }
-    out.push(card('sync', alert ? '⚠ BATERÍA INTERNA' : '⬢ SINCRONIZACIÓN', alert ? (blink() ? C.red : C.pink) : C.purple, syncRows))
+    out.push(card('sync', alert ? '⚠ BATERÍA INTERNA' : account ? `⬢ SINCRONIZACIÓN · ${account}` : '⬢ SINCRONIZACIÓN', alert ? (blink() ? C.red : C.pink) : C.purple, syncRows))
 
     const act: any[] = []
     if (activity) act.push(t([span('▶ ', C.lime), span(activity.tool + ' ', C.lime, { bold: true }), span(clip(activity.label, w - activity.tool.length - 10), C.text), span(' ' + mmss(now() - activity.start), C.muted)]))
@@ -1752,6 +1753,7 @@ export function register(on: any) {
     const r = await next(e)
     home = (await $.env.get('HOME').catch(() => '')) || ''
     paneId = (await $.env.get('HERDR_PANE_ID').catch(() => '')) || ''
+    account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
