@@ -269,3 +269,20 @@ test('el cierre del turno y los avisos de recarga se dibujan cortos', async ($) 
   const note: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'InfoNotice', requestId: 'n', props: { text: 'forge: plugin.json changed — reloaded (11 hooks: session.start)', command: null } })
   expect(JSON.stringify(await note.drawn())).toContain('↻ forge recargado')
 })
+
+test('las respuestas abren con un rombo del tema y conservan su markdown', async ($) => {
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'AssistantMessage', requestId: 'a', props: { text: '**hola** y `código`', isFirstOfReply: true } })
+  const d = JSON.stringify(await m.drawn())
+  expect(d).toContain('◆')
+  expect(d).toContain('**hola** y `código`')
+})
+
+test('las tools se dibujan con los glifos del tema y el grupo resume en castellano', async ($) => {
+  const bash: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolUse', requestId: 'b', props: { tool: 'Bash', input: { command: 'echo uno', description: 'Probar eco' }, isRunning: false, isErrored: false, isInterrupted: false } })
+  const b = JSON.stringify(await bash.drawn())
+  for (const x of ['◇ ', 'Probar eco', '$ echo uno']) expect(b).toContain(x)
+  const bad: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolUse', requestId: 'r', props: { tool: 'Read', input: { file_path: '/x/a.md' }, isRunning: false, isErrored: true, isInterrupted: false } })
+  expect(JSON.stringify(await bad.drawn())).toContain('✖ ')
+  const group: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolGroup', requestId: 'g', props: { isActive: false, isExpanded: false, calls: [{ tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }] } })
+  expect(JSON.stringify(await group.drawn())).toContain('2 lecturas · 1 comando')
+})

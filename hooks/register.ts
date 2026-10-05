@@ -130,6 +130,51 @@ const took = (ms: number) => {
   return min < 60 ? `${min} min ${sec % 60} s` : `${Math.floor(min / 60)} h ${min % 60} min`
 }
 
+const shortPath = (p: unknown) => {
+  const s = String(p || '')
+  if (cwdNow && s.startsWith(cwdNow + '/')) return s.slice(cwdNow.length + 1)
+  return home && s.startsWith(home + '/') ? '~' + s.slice(home.length) : s
+}
+
+const oneLine = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+const toolHead = (tool: string, input: any) => {
+  const i = input && typeof input === 'object' ? input : {}
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
+  if (mcp) return { name: `${mcp[1]} · ${mcp[2]}`, arg: oneLine(Object.values(i).find((v) => typeof v === 'string') || '') }
+  if (tool === 'Bash') return { name: oneLine(i.description) || 'Bash', arg: oneLine(i.command) }
+  if (['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) return { name: tool, arg: shortPath(i.file_path ?? i.notebook_path) }
+  if (tool === 'Grep' || tool === 'Glob') return { name: tool === 'Grep' ? 'Buscar' : 'Glob', arg: oneLine(i.pattern) + (i.path ? ` en ${shortPath(i.path)}` : '') }
+  if (tool === 'Agent' || tool === 'Task') return { name: `Agente${i.subagent_type ? ' ' + i.subagent_type : ''}`, arg: oneLine(i.description) }
+  if (tool === 'WebFetch' || tool === 'WebSearch') return { name: tool, arg: oneLine(i.url ?? i.query) }
+  const first = Object.values(i).find((v) => typeof v === 'string')
+  return { name: tool, arg: oneLine(first || '') }
+}
+
+const toolGlyph = (p: { isRunning?: boolean; isErrored?: boolean; isInterrupted?: boolean }) =>
+  p.isRunning ? { g: SPIN[frame % 4], c: C.lime } : p.isErrored ? { g: '✖', c: C.red } : p.isInterrupted ? { g: '◌', c: C.dim } : { g: '◇', c: C.purple }
+
+const GROUP_WORDS: Record<string, [string, string]> = {
+  Read: ['lectura', 'lecturas'],
+  Bash: ['comando', 'comandos'],
+  Grep: ['búsqueda', 'búsquedas'],
+  Glob: ['búsqueda', 'búsquedas'],
+  LS: ['listado', 'listados'],
+  WebFetch: ['página', 'páginas'],
+  WebSearch: ['búsqueda web', 'búsquedas web'],
+  ToolSearch: ['tool cargada', 'tools cargadas'],
+}
+
+const groupSummary = (calls: readonly any[]) => {
+  const counts = new Map<string, number>()
+  for (const c of calls) {
+    const w = GROUP_WORDS[c.tool]
+    const key = w ? w.join('|') : c.tool
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return [...counts].map(([k, n]) => (k.includes('|') ? `${n} ${n === 1 ? k.split('|')[0] : k.split('|')[1]}` : `${n} ${k}`)).join(' · ')
+}
+
 const mmss = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
   const m = Math.floor(s / 60)
@@ -2020,6 +2065,37 @@ export function register(on: any) {
     } catch {
       return rest
     }
+  })
+
+  on('ui.render', { component: 'ToolUse' }, async ($: any, e: any, next: any) => {
+    if (quiet || e.surface !== 'terminal' || !e.props.tool) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const { g, c } = toolGlyph(e.props)
+    const { name, arg } = toolHead(String(e.props.tool), e.props.input)
+    const head = Text({ wrap: 'truncate', children: [Text({ color: c, children: [g + ' '] }), Text({ color: C.text, bold: true, children: [name] }), ...(arg && e.props.tool !== 'Bash' ? [Text({ color: C.muted, children: [` ${arg}`] })] : [])] })
+    if (e.props.tool !== 'Bash' || !arg) return head
+    return Box({ flexDirection: 'column', children: [head, Text({ wrap: 'truncate', color: C.dim, children: [`  $ ${arg}`] })] })
+  })
+
+  on('ui.render', { component: 'ToolGroup' }, async ($: any, e: any, next: any) => {
+    const calls: any[] = e.props.calls || []
+    if (quiet || e.surface !== 'terminal' || e.props.isExpanded || !calls.length) return next(e)
+    const { Text } = $.ui.resolve(e)
+    const live = calls.find((x) => x.isRunning)
+    const { g, c } = toolGlyph({ isRunning: !!live, isErrored: calls.some((x) => x.isErrored), isInterrupted: calls.some((x) => x.isInterrupted) })
+    const now = live ? toolHead(live.tool, live.input) : undefined
+    return Text({ wrap: 'truncate', children: [Text({ color: c, children: [g + ' '] }), Text({ color: C.muted, children: [groupSummary(calls)] }), ...(now ? [Text({ color: C.dim, children: [`  ${now.name}${now.arg && live.tool !== 'Bash' ? ' ' + now.arg : ''}`] })] : [])] })
+  })
+
+  on('ui.render', { component: 'AssistantMessage' }, async ($: any, e: any, next: any) => {
+    const text = String(e.props.text || '')
+    if (quiet || e.surface !== 'terminal' || !text || text.length > 10000) return next(e)
+    const { Box, Text, Markdown } = $.ui.resolve(e)
+    if (!Markdown) return next(e)
+    return Box({
+      flexDirection: 'row',
+      children: [Box({ width: 2, flexShrink: 0, children: [Text({ color: C.purple, children: [e.props.isFirstOfReply ? '◆' : ' '] })] }), Box({ flexGrow: 1, flexShrink: 1, children: [Markdown({ text })] })],
+    })
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($: any, e: any, next: any) => {
