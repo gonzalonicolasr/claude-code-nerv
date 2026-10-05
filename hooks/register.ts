@@ -603,7 +603,7 @@ const ramp = (stops: number[], v: number) => {
 
 const WAVES = {
   get eva() { return [RGB.lime, RGB.purple] },
-  get alert() { return [RGB.pink, RGB.red] },
+  get alert() { return [RGB.purple, RGB.lime] },
   get blue() { return [RGB.amber, RGB.orange] },
 }
 
@@ -815,7 +815,7 @@ function draw($: any, e: any) {
   const ink = C.ink
   const magi = ['メルキオール', 'バルタザール', 'カスパー']
   const vote = (i: number) => {
-    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: blink() ? C.red : C.pink, bg: C.chipDim, on: true }
+    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: blink() ? C.lime : C.purple, bg: C.chipDim, on: true }
     if (working && Math.floor(frame / 6) % 3 === i) return { word: '審議', fg: C.lime, bg: C.chipDim, on: true }
     if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
@@ -827,7 +827,7 @@ function draw($: any, e: any) {
       marginRight: 2,
       children: [
         t([
-          span(' NERV ', ink, { bold: true, backgroundColor: alert && blink() ? C.red : C.purple }),
+          span(' NERV ', ink, { bold: true, backgroundColor: alert && blink() ? C.lime : C.purple }),
           span(' ネルフ', C.orange, { bold: true }),
           span(' ⟋ MAGI', C.dim),
         ]),
@@ -935,7 +935,7 @@ function draw($: any, e: any) {
       syncRows.push(t([span(blink() ? '▲ ACTIVE TIME REMAINING' : '△ ACTIVE TIME REMAINING', C.red, { bold: true })]))
       syncRows.push(t([span(rem ? `  ~${mmss(rem)} al ritmo actual` : '  cable umbilical cortado', C.pink)]))
     }
-    out.push(card('sync', alert ? '⚠ BATERÍA INTERNA' : account ? `⬢ SINCRONIZACIÓN · ${account}` : '⬢ SINCRONIZACIÓN', alert ? (blink() ? C.red : C.pink) : C.purple, syncRows))
+    out.push(card('sync', alert ? '⚠ BATERÍA INTERNA' : account ? `⬢ SINCRONIZACIÓN · ${account}` : '⬢ SINCRONIZACIÓN', alert ? (blink() ? C.lime : C.purple) : C.purple, syncRows))
 
     const act: any[] = []
     if (activity) act.push(t([span('▶ ', C.lime), span(activity.tool + ' ', C.lime, { bold: true }), span(clip(activity.label, w - activity.tool.length - 10), C.text), span(' ' + mmss(now() - activity.start), C.muted)]))
@@ -2158,7 +2158,7 @@ export function register(on: any) {
       const five = pct('five_hour')
       const alert = battery()
       const bits = [
-        Text({ color: alert ? C.red : C.purple, bold: true, children: [alert ? '⚠ NERV ' : '⬢ NERV '] }),
+        Text({ color: alert ? C.lime : C.purple, bold: true, children: [alert ? '⚠ NERV ' : '⬢ NERV '] }),
         Text({ color: C.muted, children: [`SYNC ${ctx === undefined ? '–' : Math.round(ctx) + '%'} · 5H ${five === undefined ? '–' : Math.round(five) + '%'}`] }),
       ]
       const lvl = effortLevel()
