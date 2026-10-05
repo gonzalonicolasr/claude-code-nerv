@@ -193,23 +193,31 @@ const ago = (ms: number) => {
   return m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.floor(m / 60)} h` : `hace ${Math.floor(m / 1440)} d`
 }
 const heat = (p: number) => (p >= 90 ? C.red : p >= 70 ? C.amber : C.lime)
-const energyBar = (p: number, w: number, hue: string) => {
+const energyBar = (p: number, w: number, hue: string, t = now()) => {
   const filled = Math.max(p > 0 ? 1 : 0, Math.min(w, Math.round((p / 100) * w)))
   const base = int(hue)
-  const glint = Math.floor(frame / 2) % (filled + 3)
-  const cells: { ch: string; color: string }[] = []
+  const step = Math.floor(t / 70)
+  const glint = step % (filled + 4)
+  const cells: { ch: number; color: number }[] = []
   for (let i = 0; i < w; i++) {
     if (i < filled) {
       let c = mix(int(C.ink), base, 0.45 + (0.55 * (i + 1)) / filled)
       if (i === glint) c = mix(base, 0xffffff, 0.6)
-      else if (i === glint - 1) c = mix(base, 0xffffff, 0.25)
-      if (i === filled - 1 && frame % 4 < 2) c = mix(c, 0xffffff, 0.35)
-      if (p >= 90 && frame % 6 < 3) c = mix(c, int(C.red), 0.4)
-      cells.push({ ch: '━', color: hex(c) })
-    } else cells.push((frame + i * 5) % 23 === 0 ? { ch: '·', color: hex(mix(int(C.dim), base, 0.45)) } : { ch: '┈', color: C.dim })
+      else if (i === glint - 1 || i === glint + 1) c = mix(base, 0xffffff, 0.25)
+      if (i === filled - 1 && step % 3 === 0) c = mix(c, 0xffffff, 0.35)
+      if (p >= 90 && Math.floor(t / 250) % 2 === 0) c = mix(c, int(C.red), 0.4)
+      cells.push({ ch: 0x2501, color: c })
+    } else cells.push((step + i * 5) % 29 === 0 ? { ch: 0xb7, color: mix(int(C.dim), base, 0.45) } : { ch: 0x2508, color: int(C.dim) })
   }
   return cells
 }
+
+const gaugeCells = (p: number, w: number, hue: string) => {
+  const bar = energyBar(p, w, hue)
+  return glyphs(w, 1, (x) => [bar[x].ch, bar[x].color])
+}
+
+let gauges: { key: string; p: number; w: number; hue: string }[] = []
 
 const dots = (p: number, w: number) => {
   const f = Math.max(0, Math.min(w, Math.round((p / 100) * w)))
@@ -910,12 +918,16 @@ function draw($: any, e: any) {
           }),
         ]),
       )
+    gauges = []
     const ctx = usage?.context?.percent
     const five = pct('five_hour')
     const seven = pct('seven_day')
     const gw = Math.max(6, w - 14)
     const gauge = (name: string, p: number | undefined) =>
-      t([span(name.padEnd(6), C.muted), ...(typeof p === 'number' ? energyBar(p, gw, heat(p)).map((x) => span(x.ch, x.color)) : [span('┈'.repeat(gw), C.dim)]), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
+      typeof p === 'number' && e.surface === 'terminal' && Raster
+        ? (gauges.push({ key: 'gauge-' + name, p, w: gw, hue: heat(p) }),
+          Box({ key: 'gbox-' + name, flexDirection: 'row', children: [t([span(name.padEnd(6), C.muted)]), Raster({ key: 'gauge-' + name, columns: gw, rows: 1, cells: gaugeCells(p, gw, heat(p)) }), t([span(` ${Math.round(p)}%`.padStart(5), C.text)])] }))
+        : t([span(name.padEnd(6), C.muted), span('┈'.repeat(gw), C.dim), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
     const syncRows = [t([span('PILOT ', C.muted), span(clip(model || '?', w - 6), C.text, { bold: true })]), gauge('SYNC', ctx), gauge('5H', five), gauge('7D', seven)]
     if (typeof usage?.cost?.usd === 'number') syncRows.push(t([span('COSTO ', C.muted), span(`US$ ${usage.cost.usd.toFixed(2)}`, C.text)]))
     if (alert) {
@@ -1854,6 +1866,10 @@ export function register(on: any) {
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
+    })
+    $.clock.every(50, () => {
+      if (quiet || !paneOpen || tab !== 'magi' || folded.has('sync') || !gauges.length) return
+      for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
     })
     $.clock.every(20000, () => {
       if (!quiet) refreshLocal($)
