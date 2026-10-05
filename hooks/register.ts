@@ -180,15 +180,37 @@ const mmss = (ms: number) => {
   const m = Math.floor(s / 60)
   return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`
 }
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+export const missionNotify = (root: string, project: string, took: string, unverified: number, c: { orange: string; amber: string; lime: string }) => {
+  const check = unverified
+    ? `<font color="${c.amber}"><b>⚠ ${unverified} sin verificar</b></font>`
+    : `<font color="${c.lime}">✓ verificado</font>`
+  const body = `<b>${escHtml(project)}</b>  ·  <font color="${c.orange}">⏱ ${took}</font>  ·  ${check}`
+  return ['notify-send', '-a', 'NERV', '-i', `${root}/assets/mission-complete.png`, 'MISSION COMPLETE', body]
+}
 const ago = (ms: number) => {
   const m = Math.floor(ms / 60000)
   return m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.floor(m / 60)} h` : `hace ${Math.floor(m / 1440)} d`
 }
 const heat = (p: number) => (p >= 90 ? C.red : p >= 70 ? C.amber : C.lime)
-const bar = (p: number, w: number) => {
-  const f = Math.max(0, Math.min(w, Math.round((p / 100) * w)))
-  return '━'.repeat(f) + '┈'.repeat(w - f)
+const energyBar = (p: number, w: number, hue: string) => {
+  const filled = Math.max(p > 0 ? 1 : 0, Math.min(w, Math.round((p / 100) * w)))
+  const base = int(hue)
+  const glint = Math.floor(frame / 2) % (filled + 3)
+  const cells: { ch: string; color: string }[] = []
+  for (let i = 0; i < w; i++) {
+    if (i < filled) {
+      let c = mix(int(C.ink), base, 0.45 + (0.55 * (i + 1)) / filled)
+      if (i === glint) c = mix(base, 0xffffff, 0.6)
+      else if (i === glint - 1) c = mix(base, 0xffffff, 0.25)
+      if (i === filled - 1 && frame % 4 < 2) c = mix(c, 0xffffff, 0.35)
+      if (p >= 90 && frame % 6 < 3) c = mix(c, int(C.red), 0.4)
+      cells.push({ ch: '━', color: hex(c) })
+    } else cells.push((frame + i * 5) % 23 === 0 ? { ch: '·', color: hex(mix(int(C.dim), base, 0.45)) } : { ch: '┈', color: C.dim })
+  }
+  return cells
 }
+
 const dots = (p: number, w: number) => {
   const f = Math.max(0, Math.min(w, Math.round((p / 100) * w)))
   return '●'.repeat(f) + '·'.repeat(w - f)
@@ -893,7 +915,7 @@ function draw($: any, e: any) {
     const seven = pct('seven_day')
     const gw = Math.max(6, w - 14)
     const gauge = (name: string, p: number | undefined) =>
-      t([span(name.padEnd(6), C.muted), span(bar(p ?? 0, gw), typeof p === 'number' ? heat(p) : C.dim), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
+      t([span(name.padEnd(6), C.muted), ...(typeof p === 'number' ? energyBar(p, gw, heat(p)).map((x) => span(x.ch, x.color)) : [span('┈'.repeat(gw), C.dim)]), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
     const syncRows = [t([span('PILOT ', C.muted), span(clip(model || '?', w - 6), C.text, { bold: true })]), gauge('SYNC', ctx), gauge('5H', five), gauge('7D', seven)]
     if (typeof usage?.cost?.usd === 'number') syncRows.push(t([span('COSTO ', C.muted), span(`US$ ${usage.cost.usd.toFixed(2)}`, C.text)]))
     if (alert) {
@@ -1975,7 +1997,7 @@ export function register(on: any) {
     if (!e.isAborted && took > LONG_TURN_MS && !quiet) {
       const msg = `${project || 'Claude'} · ${mmss(took)}${unverified.size ? ` · ⚠ ${unverified.size} sin verificar` : ''}`
       $.ui.toast(`MISSION COMPLETE · ${msg}`, { timeoutMs: 6000 })
-      $.process.run(['notify-send', '-a', 'NERV', 'MISSION COMPLETE', msg], { timeoutMs: 5000 }).catch(() => undefined)
+      $.process.run(missionNotify($.plugin.root, project || 'Claude', mmss(took), unverified.size, C), { timeoutMs: 5000 }).catch(() => undefined)
     }
     take(await $.session.usage().catch(() => undefined))
     refreshLocal($)
