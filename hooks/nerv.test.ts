@@ -231,7 +231,8 @@ test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', as
     lastRefusal: { gate: 'classify', reason: 'nodd/classify: no hay declaración', at: '2026-10-03T05:00:00Z' },
     counters: { toolCalls: 3, filesRead: 0, filesWritten: 1, delegations: 0, refusals: 1, agents: 0 },
   }
-  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/nodd/state.json' ? JSON.stringify(state) : '' }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/nodd/sessions/s1.json' ? JSON.stringify(state) : '' }))
   on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
   const sent: string[] = []
   on('command.run', { command: 'nodd' }, async (_$: any, e: any) => {

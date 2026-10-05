@@ -1340,8 +1340,8 @@ async function refreshForge($: any) {
 }
 
 async function refreshNodd($: any) {
-  if (!home) return
-  const raw = await $.fs.read(`${home}/.local/state/nodd/state.json`).catch(() => undefined)
+  if (!home || !sessionId) return
+  const raw = await $.fs.read(`${home}/.local/state/nodd/sessions/${sessionId}.json`).catch(() => undefined)
   try {
     nodd = typeof raw === 'string' ? JSON.parse(raw) : undefined
   } catch {
