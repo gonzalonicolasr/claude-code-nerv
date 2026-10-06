@@ -87,6 +87,8 @@ let commitAuthor = ''
 let gitInfo: any = { ok: false, upstream: '', ahead: 0, behind: 0, dirty: 0, recent: [] }
 const folded = new Set<string>()
 let todos: string[] = []
+let sessionTasks: { id: string; subject: string; status: string; blockedBy: string[] }[] = []
+let configDir = ''
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
 let hw: any = undefined
@@ -397,7 +399,23 @@ async function refreshPRs($: any) {
     }
 }
 
+async function refreshTasks($: any) {
+  if (!home || !sessionId) return
+  const list = (await $.env.get('CLAUDE_CODE_TASK_LIST_ID').catch(() => '')) || sessionId
+  const dir = `${configDir || home + '/.claude'}/tasks/${list}`
+  const files = ((await $.fs.list(dir).catch(() => [])) as any[]).filter((f) => /^\d+\.json$/.test(f.name))
+  const out: typeof sessionTasks = []
+  for (const f of files) {
+    try {
+      const x = JSON.parse((await $.fs.read(`${dir}/${f.name}`).catch(() => '')) || '{}')
+      if (x?.subject && x.status !== 'deleted') out.push({ id: String(x.id ?? f.name.slice(0, -5)), subject: String(x.subject), status: String(x.status || 'pending'), blockedBy: (x.blockedBy || []).map(String) })
+    } catch {}
+  }
+  sessionTasks = out.sort((a, b) => Number(a.id) - Number(b.id))
+}
+
 async function refreshLocal($: any) {
+  await refreshTasks($)
   const cwd = await $.session.cwd().catch(() => '')
   cwdNow = cwd
   project = base(cwd)
@@ -970,6 +988,26 @@ function draw($: any, e: any) {
     }
 
 
+    if (sessionTasks.length) {
+      const open = (x: { status: string }) => x.status !== 'completed'
+      const stuck = (x: { blockedBy: string[] }) => x.blockedBy.some((id) => sessionTasks.some((y) => y.id === id && open(y)))
+      const doing = sessionTasks.filter((x) => x.status === 'in_progress')
+      const waiting = sessionTasks.filter((x) => x.status === 'pending' && stuck(x))
+      const next = sessionTasks.filter((x) => x.status === 'pending' && !stuck(x))
+      const done = sessionTasks.filter((x) => !open(x))
+      const row = (x: { id: string; subject: string }, mark: string, mc: string, tc: string, tail = '') =>
+        t([span(x.id.padStart(2) + ' ', C.dim), span(mark + ' ', mc), span(clip(x.subject, Math.max(8, w - 6 - tail.length)), tc), ...(tail ? [span(tail, C.dim)] : [])])
+      const head = (label: string, n: number) => t([span('─ ' + label + ' ', C.dim), span(String(n), C.muted)])
+      const rows: any[] = doing.map((x) => row(x, '▶', C.orange, C.text, ''))
+      if (next.length) rows.push(head('pendientes', next.length), ...next.slice(0, 5).map((x) => row(x, '□', C.muted, C.text)))
+      if (next.length > 5) rows.push(t([span(`   … ${next.length - 5} más`, C.dim)]))
+      if (waiting.length) rows.push(head('bloqueadas', waiting.length), ...waiting.slice(0, 3).map((x) => row(x, '⊘', C.dim, C.muted, ' ← ' + x.blockedBy.filter((id) => sessionTasks.some((y) => y.id === id && open(y))).map((id) => '#' + id).join(' '))))
+      if (waiting.length > 3) rows.push(t([span(`   … ${waiting.length - 3} más`, C.dim)]))
+      if (done.length) rows.push(t([span('✓ ', C.lime), span(`${done.length} hecha${done.length > 1 ? 's' : ''}`, C.muted), ...(done.length ? [span(' · última: ' + clip(done.at(-1)!.subject, Math.max(6, w - 22)), C.dim)] : [])]))
+      const bar = Math.max(4, Math.min(12, w - 30))
+      const k = Math.round((done.length / sessionTasks.length) * bar)
+      out.push(card('tasks', `▣ TAREAS ${done.length}/${sessionTasks.length} ${'■'.repeat(k)}${'·'.repeat(bar - k)}`, doing.length ? C.orange : C.violet, rows))
+    }
     if (todos.length) out.push(card('todos', `□ ${todos.length} TO-DO${todos.length > 1 ? 'S' : ''}`, C.amber, todos.slice(0, 4).map((x) => t([span('□ ' + clip(x, w - 2), C.todo)]))))
     if (health.when) out.push(t([span(health.ok ? '♥ ' : '✖ ', health.ok ? C.lime : C.red), span(clip(health.text, w - 10), health.ok ? C.muted : C.red), span(' ' + health.when, C.dim)]))
     out.push(
@@ -1892,6 +1930,8 @@ export function register(on: any) {
     paneId = (await $.env.get('HERDR_PANE_ID').catch(() => '')) || ''
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
+    configDir = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '')
+    await refreshTasks($)
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
@@ -2102,6 +2142,10 @@ export function register(on: any) {
     $.ui.invalidate('ui.render')
     const r = await next(e)
     activity = undefined
+    if (e.tool === 'TaskCreate' || e.tool === 'TaskUpdate') {
+      await refreshTasks($)
+      $.ui.invalidate('ui.render')
+    }
     if (r?.deny) {
       $.ui.invalidate('ui.render')
       return r
