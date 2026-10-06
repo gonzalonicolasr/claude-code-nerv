@@ -989,14 +989,12 @@ function draw($: any, e: any) {
         t([span(x.id.padStart(2) + ' ', C.dim), span(mark + ' ', mc), span(clip(x.subject, Math.max(8, w - 6 - tail.length)), tc), ...(tail ? [span(tail, C.dim)] : [])])
       const head = (label: string, n: number) => t([span('─ ' + label + ' ', C.dim), span(String(n), C.muted)])
       const rows: any[] = doing.map((x) => row(x, '▶', C.orange, C.text, ''))
-      if (next.length) rows.push(head('pendientes', next.length), ...next.slice(0, 5).map((x) => row(x, '□', C.muted, C.text)))
-      if (next.length > 5) rows.push(t([span(`   … ${next.length - 5} más`, C.dim)]))
-      if (waiting.length) rows.push(head('bloqueadas', waiting.length), ...waiting.slice(0, 3).map((x) => row(x, '⊘', C.dim, C.muted, ' ← ' + x.blockedBy.filter((id) => sessionTasks.some((y) => y.id === id && open(y))).map((id) => '#' + id).join(' '))))
-      if (waiting.length > 3) rows.push(t([span(`   … ${waiting.length - 3} más`, C.dim)]))
+      if (next.length) rows.push(head('pendientes', next.length), ...next.map((x) => row(x, '□', C.muted, C.text)))
+      if (waiting.length) rows.push(head('bloqueadas', waiting.length), ...waiting.map((x) => row(x, '⊘', C.dim, C.muted, ' ← ' + x.blockedBy.filter((id) => sessionTasks.some((y) => y.id === id && open(y))).map((id) => '#' + id).join(' '))))
       if (done.length) rows.push(t([span('✓ ', C.lime), span(`${done.length} hecha${done.length > 1 ? 's' : ''}`, C.muted), ...(done.length ? [span(' · última: ' + clip(done.at(-1)!.subject, Math.max(6, w - 22)), C.dim)] : [])]))
-      const bar = Math.max(4, Math.min(12, w - 30))
+      const bar = Math.max(3, Math.min(8, w - 36))
       const k = Math.round((done.length / sessionTasks.length) * bar)
-      out.push(card('tasks', `▣ TAREAS ${done.length}/${sessionTasks.length} ${'■'.repeat(k)}${'·'.repeat(bar - k)}`, doing.length ? C.orange : C.violet, rows))
+      out.push(scard('tasks', `▣ TAREAS ${done.length}/${sessionTasks.length} ${'■'.repeat(k)}${'·'.repeat(bar - k)}`, doing.length ? C.orange : C.violet, rows, 12))
     }
     if (health.when) out.push(t([span(health.ok ? '♥ ' : '✖ ', health.ok ? C.lime : C.red), span(clip(health.text, w - 10), health.ok ? C.muted : C.red), span(' ' + health.when, C.dim)]))
     out.push(
