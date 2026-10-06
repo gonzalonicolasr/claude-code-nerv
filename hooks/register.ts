@@ -86,7 +86,6 @@ let commitDays: Record<string, number> = {}
 let commitAuthor = ''
 let gitInfo: any = { ok: false, upstream: '', ahead: 0, behind: 0, dirty: 0, recent: [] }
 const folded = new Set<string>()
-let todos: string[] = []
 let sessionTasks: { id: string; subject: string; status: string; blockedBy: string[] }[] = []
 let configDir = ''
 let health = { ok: true, when: '', text: '' }
@@ -448,15 +447,6 @@ async function refreshLocal($: any) {
   if (!gitInfo.ok) {
     if (ws) commitDays = ws.days
     if (now() - wsAt > 300000) void refreshWorkspace($)
-  }
-  if (home && paneId) {
-    const raw = await $.fs.read(`${home}/.local/state/herdr-todos.json`).catch(() => '')
-    try {
-      const items = (JSON.parse(raw || '{}')[paneId] || []).map((i: any) => (typeof i === 'string' ? { text: i } : i))
-      todos = items.filter((i: any) => !i.done).map((i: any) => i.text)
-    } catch {
-      todos = []
-    }
   }
   const st: any = await $.settings.read().catch(() => undefined)
   const se = String(st?.effortLevel || '')
@@ -1008,7 +998,6 @@ function draw($: any, e: any) {
       const k = Math.round((done.length / sessionTasks.length) * bar)
       out.push(card('tasks', `▣ TAREAS ${done.length}/${sessionTasks.length} ${'■'.repeat(k)}${'·'.repeat(bar - k)}`, doing.length ? C.orange : C.violet, rows))
     }
-    if (todos.length) out.push(card('todos', `□ ${todos.length} TO-DO${todos.length > 1 ? 'S' : ''}`, C.amber, todos.slice(0, 4).map((x) => t([span('□ ' + clip(x, w - 2), C.todo)]))))
     if (health.when) out.push(t([span(health.ok ? '♥ ' : '✖ ', health.ok ? C.lime : C.red), span(clip(health.text, w - 10), health.ok ? C.muted : C.red), span(' ' + health.when, C.dim)]))
     out.push(
       Box({
