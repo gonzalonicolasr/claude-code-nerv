@@ -88,6 +88,13 @@ let gitInfo: any = { ok: false, upstream: '', ahead: 0, behind: 0, dirty: 0, rec
 const folded = new Set<string>()
 let sessionTasks: { id: string; subject: string; status: string; blockedBy: string[] }[] = []
 let configDir = ''
+let acctMenu = false
+let acctNote = ''
+const emails: Record<string, string> = {}
+const ACCOUNTS = [
+  { id: 'personal', conf: '.claude.json', tag: 'PERSONAL' },
+  { id: 'dev', conf: '.claude-secundaria/.claude.json', tag: 'DEV' },
+]
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
 let hw: any = undefined
@@ -396,6 +403,28 @@ async function refreshPRs($: any) {
     } catch {
       prError = 'respuesta de gh ilegible'
     }
+}
+
+const acctNow = () => (!configDir || configDir === `${home}/.claude` ? 'personal' : configDir === `${home}/.claude-secundaria` ? 'dev' : '')
+const acctName = (id: string) => (emails[id] || id).split('@')[0]
+
+async function loadEmails($: any) {
+  for (const a of ACCOUNTS) {
+    try {
+      emails[a.id] = String(JSON.parse((await $.fs.read(`${home}/${a.conf}`).catch(() => '')) || '{}')?.oauthAccount?.emailAddress || '')
+    } catch {}
+  }
+}
+
+async function switchAccount($: any, id: string) {
+  acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : 'cambiando de cuenta…'
+  $.ui.invalidate('ui.render')
+  if (acctNote !== 'cambiando de cuenta…') return
+  const r = await $.process.run([`${home}/.local/bin/claude-cuenta`, id, sessionId, paneId], { timeoutMs: 10000 }).catch((err: any) => ({ exitCode: 1, stderr: String(err) }))
+  if (r?.exitCode !== 0) {
+    acctNote = clip(String(r?.stderr || 'no se pudo cambiar').trim(), 60)
+    $.ui.invalidate('ui.render')
+  }
 }
 
 async function refreshTasks($: any) {
@@ -784,6 +813,7 @@ function draw($: any, e: any) {
   const card = (key: string, title: string, color: string, rows: any[]) =>
     Box({ key, flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, children: [titleRow(key, [span(title, color, { bold: true })], color), ...(folded.has(key) ? [] : rows)] })
   const kv = (left: any[], right: any[]) => Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t(left), t(right)] })
+  const kvBtn = (left: any[], btn: any) => Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t(left), btn] })
   const scard = (key: string, title: string, color: string, rows: any[], max: number) => {
     const content = measure(rows, w)
     if (!dock || content <= max || folded.has(key)) return card(key, title, color, rows)
@@ -937,7 +967,15 @@ function draw($: any, e: any) {
         ? (gauges.push({ key: 'gauge-' + name, p, w: gw, hue: heat(p) }),
           Box({ key: 'gbox-' + name, flexDirection: 'row', children: [t([span(name.padEnd(6), C.muted)]), Raster({ key: 'gauge-' + name, columns: gw, rows: 1, cells: gaugeCells(p, gw, heat(p)) }), t([span(` ${Math.round(p)}%`.padStart(5), C.text)])] }))
         : t([span(name.padEnd(6), C.muted), span('┈'.repeat(gw), C.dim), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
-    const syncRows = [t([span('PILOT ', C.muted), span(clip(model || '?', w - 6), C.text, { bold: true })]), gauge('SYNC', ctx), gauge('5H', five), gauge('7D', seven)]
+    const acctRows: any[] = []
+    if (acctNow()) {
+      acctRows.push(kvBtn([span('CUENTA ', C.muted), span(clip(acctName(acctNow()), w - 18), C.text, { bold: true })], Button({ key: 'acct-menu', label: acctMenu ? '▴' : 'cambiar ▾', plain: true, dimColor: !acctMenu, onPress: () => ((acctMenu = !acctMenu), (acctNote = ''), $.ui.invalidate('ui.render')) })))
+      if (acctMenu)
+        for (const a of ACCOUNTS.filter((x) => x.id !== acctNow()))
+          acctRows.push(Box({ key: 'acct-' + a.id, flexDirection: 'row', children: [t([span('  → ', C.dim)]), Button({ key: 'acct-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) })] }))
+      if (acctNote) acctRows.push(t([span('  ' + acctNote, C.amber)]))
+    }
+    const syncRows = [...acctRows, t([span('PILOT ', C.muted), span(clip(model || '?', w - 6), C.text, { bold: true })]), gauge('SYNC', ctx), gauge('5H', five), gauge('7D', seven)]
     if (typeof usage?.cost?.usd === 'number') syncRows.push(t([span('COSTO ', C.muted), span(`US$ ${usage.cost.usd.toFixed(2)}`, C.text)]))
     if (alert) {
       const rem = remaining()
@@ -1919,6 +1957,7 @@ export function register(on: any) {
     sessionId = (await $.session.id().catch(() => '')) || ''
     configDir = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '')
     await refreshTasks($)
+    await loadEmails($)
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
@@ -1928,7 +1967,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | magi | git | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -1986,6 +2025,13 @@ export function register(on: any) {
       const panes = await $.ui.panes().catch((err: any) => String(err))
       const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet }
       return { text: 'nerv debug: ' + JSON.stringify(st) + ' panes=' + JSON.stringify(panes) }
+    }
+    if (arg.startsWith('cuenta')) {
+      const id = arg.split(/\s+/)[1] || ''
+      if (!acctNow()) return { text: 'esta sesión no tiene otra cuenta a la que cambiar' }
+      if (!ACCOUNTS.some((x) => x.id === id) || id === acctNow()) return { text: `uso: /nerv cuenta <${ACCOUNTS.filter((x) => x.id !== acctNow()).map((x) => x.id).join('|')}> · ahora: ${acctName(acctNow())}` }
+      await switchAccount($, id)
+      return { text: `NERV: ${acctNote}` }
     }
     if (arg === 'prs') {
       await refreshPRs($)
@@ -2240,7 +2286,7 @@ export function register(on: any) {
   on('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any, next: any) => {
     if (quiet || paneOpen || e.props.hasSurvey) return next(e)
     try {
-      const { Box, Text } = $.ui.resolve(e)
+      const { Box, Text, Button } = $.ui.resolve(e)
       const rest = await next(e)
       const ctx = usage?.context?.percent
       const five = pct('five_hour')
@@ -2254,7 +2300,16 @@ export function register(on: any) {
       if (unverified.size) bits.push(Text({ color: C.amber, children: [` · ⚠ ${unverified.size} sin verificar`] }))
       if (patternBlue) bits.push(Text({ color: C.orange, children: [' · ◆ PATTERN BLUE'] }))
       bits.push(Text({ color: C.dim, children: [' · /nerv'] }))
-      return Box({ flexDirection: 'column', children: [Text({ wrap: 'truncate', children: bits }), rest] })
+      const top: any[] = [Text({ wrap: 'truncate', children: bits })]
+      if (acctNow()) top.push(Text({ color: C.dim, children: [' · '] }), Button({ key: 'band-acct', label: `${acctName(acctNow())} ${acctMenu ? '▴' : '▾'}`, plain: true, onPress: () => ((acctMenu = !acctMenu), (acctNote = ''), $.ui.invalidate('ui.render')) }))
+      const rows: any[] = [Box({ key: 'band-top', flexDirection: 'row', children: top })]
+      if (acctNow() && acctMenu) {
+        const opts: any[] = [Text({ color: C.dim, children: ['  cambiar a → '] })]
+        for (const a of ACCOUNTS.filter((x) => x.id !== acctNow())) opts.push(Button({ key: 'band-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) }))
+        if (acctNote) opts.push(Text({ color: C.amber, children: ['  ' + acctNote] }))
+        rows.push(Box({ key: 'band-menu', flexDirection: 'row', children: opts }))
+      }
+      return Box({ flexDirection: 'column', children: [...rows, rest] })
     } catch {
       return next(e)
     }
