@@ -45,6 +45,7 @@ const TABS = [
   { id: 'forge', label: 'FORGE', hotkey: '5' },
   { id: 'nodd', label: 'NODD', hotkey: '6' },
   { id: 'cortex', label: 'CORTEX', hotkey: '7' },
+  { id: 'yt', label: 'YOUTUBE', hotkey: '8' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -124,6 +125,12 @@ let forge: any = undefined
 let nodd: any = undefined
 let cortex: { stats?: any; recent?: any[]; err?: string; at?: number } = {}
 let blue = { ars: 1555, live: false, at: 0 }
+type YtItem = { id: string; title: string; ch: string; d: number }
+let yt: { results: YtItem[]; queue: YtItem[]; query: string; busy: boolean; err: string; now?: { pos?: number; dur?: number; pause?: boolean; idx: number; vol?: number; title?: string } } = { results: [], queue: [], query: '', busy: false, err: '' }
+let runDir = '/tmp'
+const ytSock = () => `${runDir}/nerv-yt.sock`
+const ytState = () => `${home}/.local/state/nerv/yt.json`
+const clockOf = (sec: number) => mmss((sec || 0) * 1000)
 let cortexKey = ''
 let cortexBusy = false
 const CORTEX_URL = 'https://cortexmem.com/api/cortex/mcp'
@@ -937,6 +944,7 @@ function draw($: any, e: any) {
             if (x.id === 'forge') refreshForge($)
             if (x.id === 'nodd') refreshNodd($)
             if (x.id === 'cortex') refreshCortex($)
+            if (x.id === 'yt') ytPoll($)
             $.ui.invalidate('ui.render')
           },
         }),
@@ -1176,6 +1184,65 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
+
+  if (tab === 'yt') {
+    const n = yt.now
+    const cur = n ? yt.queue[n.idx] : undefined
+    const nowRows: any[] = []
+    if (n) {
+      nowRows.push(t([span(clip(cur?.title || n.title || 'cargando…', w - 2), C.text, { bold: true })]))
+      if (cur?.ch) nowRows.push(t([span(clip(cur.ch, w - 2), C.muted)]))
+      if (n.dur) {
+        const bw = Math.max(6, w - 16)
+        const f = Math.min(bw, Math.round(((n.pos || 0) / n.dur) * bw))
+        nowRows.push(t([span('━'.repeat(f), C.lime), span('┈'.repeat(bw - f), C.dim), span(` ${clockOf(n.pos || 0)}/${clockOf(n.dur)}`, C.muted)]))
+      } else nowRows.push(t([span('cargando el audio…', C.amber)]))
+      nowRows.push(
+        Box({
+          key: 'yt-ctl',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [
+            chip('yt-prev', '⏮', true, C.tabBg, () => void ytCtl($, ['playlist-prev'])),
+            chip('yt-pause', n.pause ? '▶' : '⏸', true, C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
+            chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
+            chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
+            chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'volume', -10])),
+            t([span(` ${Math.round(n.vol ?? 0)}% `, C.muted)]),
+            chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'volume', 10])),
+          ],
+        }),
+      )
+      if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('después: ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 12), C.muted)]))
+    } else nowRows.push(t([span('nada sonando', C.muted)]))
+    nowRows.push(
+      Box({
+        key: 'yt-open',
+        flexDirection: 'row',
+        children: [
+          chip('yt-search', '⌕ buscar…', true, C.tabBg, () => void ytAsk($)),
+          t([span(' ')]),
+          chip('yt-tui', '⧉ abrir yt', true, C.tabBg, () => void $.process.run(['setsid', '-f', 'uwsm-app', '--', 'ghostty', '--title=yt', '-e', `${home}/.local/bin/yt`, ...(yt.query ? [yt.query] : [])], { timeoutMs: 5000 }).catch(() => undefined)),
+        ],
+      }),
+    )
+    out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n && !n.pause ? C.lime : C.purple, nowRows))
+    const resRows: any[] = yt.busy ? [t([span(`buscando «${clip(yt.query, w - 14)}»…`, C.amber)])] : yt.err ? [t([span('✖ ' + yt.err, C.red)])] : []
+    yt.results.forEach((r, i) => {
+      const playing = !!cur && cur.id === r.id
+      resRows.push(
+        Box({
+          key: 'yt-r-' + r.id,
+          flexDirection: 'row',
+          children: [
+            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : '·'} ${clip(r.title, Math.max(8, w - 12))}`, plain: true, dimColor: false, onPress: () => void ytPlay($, i) }),
+            t([span(r.d ? ' ' + clockOf(r.d) : '', C.dim)]),
+          ],
+        }),
+      )
+    })
+    if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `⌕ ${clip(yt.query, w - 8)}` : '⌕ RESULTADOS', C.violet, resRows, 14))
+  }
 
   if (tab === 'cortex') {
     const s = cortex.stats
@@ -1649,6 +1716,81 @@ async function refreshCortex($: any) {
   }
 }
 
+async function ytSend($: any, cmds: any[][]) {
+  const r = await $.process.run(['socat', '-t', '0.3', '-', `UNIX-CONNECT:${ytSock()}`], { stdin: cmds.map((c, i) => JSON.stringify({ command: c, request_id: i + 1 })).join('\n') + '\n', timeoutMs: 3000 })
+  const out: Record<number, any> = {}
+  for (const line of String(r?.stdout || '').split('\n')) {
+    try {
+      const j = JSON.parse(line)
+      if (j.request_id) out[j.request_id] = j.error === 'success' ? j.data : undefined
+    } catch {}
+  }
+  return cmds.map((_, i) => out[i + 1])
+}
+
+async function ytSearch($: any, q: string) {
+  yt = { ...yt, busy: true, err: '', query: q }
+  $.ui.invalidate('ui.render')
+  const r = await $.process.run(['yt-dlp', `ytsearch12:${q}`, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 30000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
+  try {
+    const entries = JSON.parse(String(r.stdout || '{}')).entries || []
+    yt.results = entries.filter((e: any) => e?.id).map((e: any) => ({ id: String(e.id), title: String(e.title || e.id), ch: String(e.channel || e.uploader || ''), d: Number(e.duration) || 0 }))
+    if (!yt.results.length) yt.err = 'sin resultados'
+  } catch {
+    yt.err = clip(String(r.stderr || 'no se pudo buscar').trim().split('\n').pop() || '', 60)
+  }
+  yt.busy = false
+  $.ui.invalidate('ui.render')
+}
+
+async function ytAsk($: any) {
+  const recent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
+  const pick = await $.ui.ask('¿Qué querés escuchar? Escribí la búsqueda en «Other».', { options: [...recent.slice(0, 3), 'Cancelar'], header: 'youtube' }).catch(() => 'Cancelar')
+  const q = String(pick || '').trim()
+  if (!q || q === 'Cancelar') return
+  await $.store.set('ytRecent', [q, ...recent.filter((x) => x !== q)].slice(0, 5)).catch(() => undefined)
+  await ytSearch($, q)
+}
+
+async function ytPlay($: any, i: number) {
+  const list = yt.results.slice(i, i + 25)
+  if (!list.length) return
+  await ytSend($, [['quit']]).catch(() => undefined)
+  await $.process
+    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=70', `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', ...list.map((x) => `https://youtu.be/${x.id}`)], { timeoutMs: 5000 })
+    .catch(() => undefined)
+  yt.queue = list
+  yt.now = { idx: 0, title: list[0].title }
+  await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
+  await $.fs.write(ytState(), JSON.stringify({ queue: list }) + '\n').catch(() => undefined)
+  $.ui.invalidate('ui.render')
+}
+
+async function ytPoll($: any) {
+  const alive = await $.fs.stat(ytSock()).catch(() => undefined)
+  if (!alive) {
+    if (yt.now) ((yt.now = undefined), $.ui.invalidate('ui.render'))
+    return
+  }
+  const [pos, dur, pause, idx, vol, title] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'volume'], ['get_property', 'media-title']]).catch(() => [])
+  if (idx === undefined && pause === undefined) {
+    yt.now = undefined
+  } else {
+    if (!yt.queue.length) {
+      try {
+        yt.queue = JSON.parse((await $.fs.read(ytState()).catch(() => '')) || '{}').queue || []
+      } catch {}
+    }
+    yt.now = { pos, dur, pause, idx: Number(idx) || 0, vol, title }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function ytCtl($: any, cmd: any[]) {
+  await ytSend($, [cmd]).catch(() => undefined)
+  await ytPoll($)
+}
+
 async function refreshNodd($: any) {
   if (!home || !sessionId) return
   const raw = await $.fs.read(`${home}/.local/state/nodd/sessions/${sessionId}.json`).catch(() => undefined)
@@ -2062,6 +2204,7 @@ export function register(on: any) {
   on('session.start', async ($: any, e: any, next: any) => {
     const r = await next(e)
     home = (await $.env.get('HOME').catch(() => '')) || ''
+    runDir = (await $.env.get('XDG_RUNTIME_DIR').catch(() => '')) || '/tmp'
     paneId = (await $.env.get('HERDR_PANE_ID').catch(() => '')) || ''
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
@@ -2077,7 +2220,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | cortex | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -2095,6 +2238,7 @@ export function register(on: any) {
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
+      if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     })
     $.clock.every(50, () => {
@@ -2154,6 +2298,13 @@ export function register(on: any) {
       const id = arg.split(/\s+/)[1] || ''
       if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
       return { text: `NERV: unidad ${THEMES[themeId].label}` }
+    }
+    if (arg === 'yt' || arg.startsWith('yt ')) {
+      tab = 'yt'
+      await $.store.set('tab', tab).catch(() => undefined)
+      const q = String(e.args || '').trim().slice(2).trim()
+      if (q) void ytSearch($, q)
+      else await ytPoll($)
     }
     if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
       tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
