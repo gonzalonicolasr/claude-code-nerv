@@ -44,6 +44,7 @@ const TABS = [
   { id: 'crew', label: 'EQUIPO', hotkey: '4' },
   { id: 'forge', label: 'FORGE', hotkey: '5' },
   { id: 'nodd', label: 'NODD', hotkey: '6' },
+  { id: 'cortex', label: 'CORTEX', hotkey: '7' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -121,6 +122,11 @@ let effortFrom = 0
 let effortAt = 0
 let forge: any = undefined
 let nodd: any = undefined
+let cortex: { stats?: any; recent?: any[]; err?: string; at?: number } = {}
+let cortexKey = ''
+let cortexBusy = false
+const CORTEX_URL = 'https://cortexmem.com/api/cortex/mcp'
+const CORTEX_TYPES: Record<string, string> = { bug_fix: 'bugs', discovery: 'hallazgos', config: 'config', architecture: 'arquitectura', decision: 'decisiones', lesson: 'lecciones', pattern: 'patrones', preference: 'preferencias', session_summary: 'sesiones', context: 'contexto' }
 let forgeMissing = false
 let forgeDraft = ''
 const forgeGroup: Record<string, string> = {}
@@ -929,6 +935,7 @@ function draw($: any, e: any) {
             if (x.id === 'crew') refreshCrew($)
             if (x.id === 'forge') refreshForge($)
             if (x.id === 'nodd') refreshNodd($)
+            if (x.id === 'cortex') refreshCortex($)
             $.ui.invalidate('ui.render')
           },
         }),
@@ -1168,6 +1175,49 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
+
+  if (tab === 'cortex') {
+    const s = cortex.stats
+    if (!s) out.push(card('cx-main', '◉ CORTEX', C.purple, [t([span(cortex.err ? '✖ ' + cortex.err : 'leyendo Cortex…', cortex.err ? C.red : C.muted)])]))
+    else {
+      out.push(
+        card('cx-main', '◉ CORTEX · MEMORIA', C.purple, [
+          kv([span('MEMORIAS ', C.muted), span(String(s.total_memories), C.text, { bold: true })], [span(`${s.total_projects} proyectos`, C.muted)]),
+          kv([span('SESIONES ', C.muted), span(String(s.total_sessions), C.text)], [span(s.active_sessions ? `● ${s.active_sessions} activas` : '○ ninguna activa', s.active_sessions ? C.lime : C.dim)]),
+          kv([span('7 DÍAS ', C.muted), span(`+${s.last_7_days}`, C.lime, { bold: true })], [span('30 DÍAS ', C.muted), span(`+${s.last_30_days}`, C.text)]),
+          kv([span('RACHA ', C.muted), span(`${s.current_streak} días`, C.orange, { bold: true })], [span(`${s.active_days} días activos`, C.dim)]),
+          ...(cortex.err ? [t([span('✖ ' + cortex.err, C.red)])] : []),
+        ]),
+      )
+      const hue: Record<string, string> = { bug_fix: C.red, discovery: C.cyan, config: C.violet, architecture: C.purple, decision: C.orange, lesson: C.amber, pattern: C.lime, preference: C.pink }
+      const bars = (rows: { name: string; count: number }[], color: (r: any) => string, mark: (r: any) => boolean, lw: number) => {
+        const top = Math.max(1, ...rows.map((r) => r.count))
+        const bw = Math.max(4, w - lw - 7)
+        return rows.map((r) => {
+          const f = Math.max(1, Math.round((r.count / top) * bw))
+          return t([span(clip(r.name, lw).padEnd(lw) + ' ', mark(r) ? C.lime : C.muted, mark(r) ? { bold: true } : {}), span('━'.repeat(f), color(r)), span('┈'.repeat(bw - f), C.dim), span(` ${r.count}`.padStart(5), C.text)])
+        })
+      }
+      const types = (s.by_type || []).map((x: any) => ({ name: CORTEX_TYPES[x.type] || x.type, type: x.type, count: x.count }))
+      if (types.length) out.push(card('cx-types', '▤ POR TIPO', C.violet, bars(types, (r) => hue[r.type] || C.muted, () => false, 12)))
+      const projs = (s.by_project || []).slice(0, 8)
+      if (projs.length) out.push(card('cx-projects', '◈ PROYECTOS', C.violet, bars(projs, () => C.purple, (r) => r.name === project, 14)))
+      const recent = cortex.recent || []
+      if (recent.length)
+        out.push(
+          card(
+            'cx-recent',
+            '▸ RECIENTES',
+            C.violet,
+            recent.map((m: any) => {
+              const when = Date.parse(String(m.updated_at || m.created_at || '').replace(' ', 'T') + 'Z')
+              const tail = Number.isFinite(when) ? ' ' + ago(now() - when).replace('hace ', '') : ''
+              return t([span('● ', hue[m.type] || C.muted), span(clip(String(m.title || ''), Math.max(8, w - 4 - tail.length)), C.text), span(tail, C.dim)])
+            }),
+          ),
+        )
+    }
+  }
 
   if (tab === 'nodd') {
     if (!nodd) out.push(card('nodd-main', '◆ NODD', C.purple, [t([span('sin estado: cargá el mod nodd (CLAUDE_CODE_PLUGIN_DIRS)', C.muted)])]))
@@ -1542,6 +1592,39 @@ async function refreshForge($: any) {
     forge = JSON.parse(raw)
     forgeMissing = false
   } catch {}
+}
+
+async function cortexCall($: any, name: string, args: Record<string, unknown> = {}) {
+  const r = await $.http.fetch(CORTEX_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cortexKey}`, 'Content-Type': 'application/json', Accept: 'application/json', 'X-Cortex-Output': 'json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+  })
+  if (!r.ok) throw new Error(`Cortex respondió ${r.status}`)
+  const j = JSON.parse(r.text)
+  if (j.error) throw new Error(String(j.error.message || 'error de Cortex'))
+  return JSON.parse(j.result?.content?.[0]?.text || 'null')
+}
+
+async function refreshCortex($: any) {
+  if (cortexBusy || !home) return
+  cortexBusy = true
+  try {
+    if (!cortexKey) {
+      const conf = JSON.parse((await $.fs.read(`${home}/.claude.json`).catch(() => '')) || '{}')
+      cortexKey = String(conf?.mcpServers?.cortex?.env?.CORTEX_API_KEY || '')
+    }
+    if (!cortexKey) cortex = { err: 'no encontré la clave de Cortex en ~/.claude.json' }
+    else {
+      const [stats, recent] = await Promise.all([cortexCall($, 'memoria_stats'), cortexCall($, 'memoria_recent', { limit: 6 })])
+      cortex = { stats, recent: Array.isArray(recent) ? recent : [], at: now() }
+    }
+  } catch (err: any) {
+    cortex = { ...cortex, err: clip(String(err?.message || err), 60) }
+  } finally {
+    cortexBusy = false
+    $.ui.invalidate('ui.render')
+  }
 }
 
 async function refreshNodd($: any) {
@@ -1972,7 +2055,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | cortex | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -1980,6 +2063,7 @@ export function register(on: any) {
     if (tab === 'hw') refreshHw($)
     if (tab === 'crew') refreshCrew($)
     if (tab === 'forge') refreshForge($)
+    if (tab === 'cortex') refreshCortex($)
     $.clock.every(125, () => {
       frame++
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
@@ -1988,6 +2072,7 @@ export function register(on: any) {
       if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
+      if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     })
     $.clock.every(50, () => {
@@ -2048,13 +2133,14 @@ export function register(on: any) {
       if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
       return { text: `NERV: unidad ${THEMES[themeId].label}` }
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : 'magi'
+    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
+      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
       if (tab === 'crew') await refreshCrew($)
       if (tab === 'forge') await refreshForge($)
       if (tab === 'nodd') await refreshNodd($)
+      if (tab === 'cortex') await refreshCortex($)
     }
     quiet = false
     await $.store.set('quiet', false).catch(() => undefined)
