@@ -123,6 +123,7 @@ let effortAt = 0
 let forge: any = undefined
 let nodd: any = undefined
 let cortex: { stats?: any; recent?: any[]; err?: string; at?: number } = {}
+let blue = { ars: 1555, live: false, at: 0 }
 let cortexKey = ''
 let cortexBusy = false
 const CORTEX_URL = 'https://cortexmem.com/api/cortex/mcp'
@@ -1189,6 +1190,22 @@ function draw($: any, e: any) {
           ...(cortex.err ? [t([span('✖ ' + cortex.err, C.red)])] : []),
         ]),
       )
+      const bugs = s.bug_fix_count ?? 0
+      const decisions = s.decisions_count ?? 0
+      const hours = (bugs * 30) / 60
+      const tokens = bugs * 2000 + decisions * 500 + Math.max(0, (s.total_memories ?? 0) - bugs - decisions) * 200
+      const usd = hours * 30 + (tokens / 1_000_000) * 3
+      const ars = usd * blue.ars
+      const fmt = (n: number) => Math.round(n).toLocaleString('es-AR')
+      const short = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n)))
+      out.push(
+        card('cx-savings', '◆ AHORRO', C.lime, [
+          kv([span('USD ', C.muted), span(fmt(usd), C.lime, { bold: true })], [span('ARS ', C.muted), span(short(ars), C.lime, { bold: true })]),
+          kv([span('DEBUG ', C.muted), span(`${fmt(hours)} h`, C.text)], [span(`${bugs} bugs × 30 min`, C.dim)]),
+          kv([span('TOKENS ', C.muted), span(short(tokens), C.text)], [span(`USD ${((tokens / 1_000_000) * 3).toFixed(2).replace('.', ',')}`, C.dim)]),
+          t([span(blue.live ? `blue hoy $${fmt(blue.ars)}` : `blue de referencia $${fmt(blue.ars)}`, C.dim), span(' · USD 30/h · USD 3/MTok', C.dim)]),
+        ]),
+      )
       const hue: Record<string, string> = { bug_fix: C.red, discovery: C.cyan, config: C.violet, architecture: C.purple, decision: C.orange, lesson: C.amber, pattern: C.lime, preference: C.pink }
       const bars = (rows: { name: string; count: number }[], color: (r: any) => string, mark: (r: any) => boolean, lw: number) => {
         const top = Math.max(1, ...rows.map((r) => r.count))
@@ -1618,6 +1635,11 @@ async function refreshCortex($: any) {
     else {
       const [stats, recent] = await Promise.all([cortexCall($, 'memoria_stats'), cortexCall($, 'memoria_recent', { limit: 6 })])
       cortex = { stats, recent: Array.isArray(recent) ? recent : [], at: now() }
+      if (now() - blue.at > 3600000) {
+        const r = await $.http.fetch('https://dolarapi.com/v1/dolares/blue').catch(() => undefined)
+        const venta = r?.ok ? Number(JSON.parse(r.text)?.venta) : NaN
+        blue = Number.isFinite(venta) && venta > 0 ? { ars: venta, live: true, at: now() } : { ...blue, at: now() }
+      }
     }
   } catch (err: any) {
     cortex = { ...cortex, err: clip(String(err?.message || err), 60) }
