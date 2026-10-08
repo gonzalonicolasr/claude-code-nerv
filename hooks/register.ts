@@ -424,7 +424,12 @@ async function switchAccount($: any, id: string) {
   if (r?.exitCode !== 0) {
     acctNote = clip(String(r?.stderr || 'no se pudo cambiar').trim(), 60)
     $.ui.invalidate('ui.render')
+    return
   }
+  await $.clock.sleep(20000).catch(() => undefined)
+  const log = String((await $.fs.read(`${home}/.local/state/claude-cuenta/${sessionId}.log`).catch(() => '')) || '').trim().split('\n').pop()
+  acctNote = clip(`no se pudo cambiar${log ? ': ' + log : ''}`, 70)
+  $.ui.invalidate('ui.render')
 }
 
 async function refreshTasks($: any) {
