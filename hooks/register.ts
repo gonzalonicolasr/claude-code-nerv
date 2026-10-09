@@ -41,7 +41,7 @@ const TABS = [
   { id: 'magi', label: 'MAGI', hotkey: '1' },
   { id: 'git', label: 'GIT', hotkey: '2' },
   { id: 'hw', label: 'HW', hotkey: '3' },
-  { id: 'crew', label: 'EQUIPO', hotkey: '4' },
+  { id: 'board', label: 'TABLERO', hotkey: '4' },
   { id: 'forge', label: 'FORGE', hotkey: '5' },
   { id: 'nodd', label: 'NODD', hotkey: '6' },
   { id: 'cortex', label: 'CORTEX', hotkey: '7' },
@@ -103,8 +103,12 @@ let hw: any = undefined
 let hwBusy = false
 const cpuHist: number[] = []
 const gpuHist: number[] = []
-let crew: any[] = []
-let crewBusy = false
+type BoardTask = { id: number; title: string; status: string; assignee: string | null; priority: string; area: string | null; position: number; updatedAt: number }
+let board: { tasks: BoardTask[]; err: string; busy: boolean } = { tasks: [], err: '', busy: false }
+let boardCfg: { url: string; user: string; password: string } | undefined
+let boardCookie = ''
+let boardDraft = ''
+let boardAll = false
 let bodyOffset = 0
 let bodyMax = 0
 let bodyTab = ''
@@ -551,36 +555,54 @@ async function refreshHw($: any) {
   }
 }
 
-async function refreshCrew($: any) {
-  if (crewBusy) return
-  crewBusy = true
-  try {
-    const a = await herdrJson($, ['agent', 'list'])
-    const w = await herdrJson($, ['workspace', 'list'])
-    const t = await herdrJson($, ['tab', 'list'])
-    if (!a) {
-      crew = []
-      return
+async function boardFetch($: any, path: string, init: { method?: string; body?: string } = {}) {
+  if (!boardCfg) {
+    try {
+      boardCfg = JSON.parse((await $.fs.read(`${home}/.config/nerv/tablero.json`)) || '')
+    } catch {
+      throw new Error('falta ~/.config/nerv/tablero.json')
     }
-    const spaces = Object.fromEntries((w?.workspaces || []).map((x: any) => [x.workspace_id, x.label]))
-    const tabs = Object.fromEntries((t?.tabs || []).map((x: any) => [x.tab_id, x.label || '']))
-    const rank: any = { blocked: 0, done: 1, working: 2, idle: 3 }
-    crew = a.agents
-      .map((x: any) => {
-        const tb = tabs[x.tab_id] || ''
-        return {
-          status: x.agent_status,
-          agent: x.agent,
-          where: tb && !/^\d+$/.test(tb) ? `${spaces[x.workspace_id] || ''} › ${tb}` : spaces[x.workspace_id] || '',
-          title: (x.terminal_title_stripped || '').replace(/^(π|pi)\s*-\s*\S+$/, ''),
-          me: x.pane_id === paneId,
-        }
-      })
-      .sort((x: any, y: any) => (rank[x.status] ?? 9) - (rank[y.status] ?? 9) || x.where.localeCompare(y.where))
-  } catch {
-  } finally {
-    crewBusy = false
   }
+  const cfg = boardCfg!
+  const go = () => $.http.fetch(cfg.url + path, { ...init, headers: { 'Content-Type': 'application/json', ...(boardCookie ? { Cookie: boardCookie } : {}) } })
+  let r: any = boardCookie ? await go() : { status: 401 }
+  if (r.status === 401) {
+    const l = await $.http.fetch(cfg.url + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: cfg.user, password: cfg.password }) })
+    const sc = l.headers?.['set-cookie']
+    boardCookie = String(Array.isArray(sc) ? sc[0] : sc || '').split(';')[0]
+    if (!l.ok || !boardCookie) throw new Error(`no pude entrar al tablero (${l.status})`)
+    r = await go()
+  }
+  if (!r.ok) throw new Error(`el tablero respondió ${r.status}`)
+  return r.text ? JSON.parse(r.text) : null
+}
+
+async function refreshBoard($: any) {
+  if (board.busy) return
+  board.busy = true
+  try {
+    const st = await boardFetch($, '/api/state')
+    board.tasks = (st?.tasks || []) as BoardTask[]
+    board.err = ''
+  } catch (err: any) {
+    board.err = clip(String(err?.message || err), 60)
+  } finally {
+    board.busy = false
+    $.ui.invalidate('ui.render')
+  }
+}
+
+async function boardMove($: any, id: number, status: string) {
+  const t = board.tasks.find((x) => x.id === id)
+  if (t) t.status = status
+  $.ui.invalidate('ui.render')
+  await boardFetch($, `/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status, beforeId: null }) }).catch((err: any) => (board.err = clip(String(err?.message || err), 60)))
+  await refreshBoard($)
+}
+
+async function boardAdd($: any, title: string) {
+  await boardFetch($, '/api/tasks', { method: 'POST', body: JSON.stringify({ title, assignee: boardCfg?.user || null, status: 'pendiente', priority: 'media' }) }).catch((err: any) => (board.err = clip(String(err?.message || err), 60)))
+  await refreshBoard($)
 }
 
 async function herdrJson($: any, args: string[]) {
@@ -956,7 +978,7 @@ function draw($: any, e: any) {
             tab = x.id
             $.store.set('tab', tab).catch(() => undefined)
             if (x.id === 'hw') refreshHw($)
-            if (x.id === 'crew') refreshCrew($)
+            if (x.id === 'board') refreshBoard($)
             if (x.id === 'forge') refreshForge($)
             if (x.id === 'nodd') refreshNodd($)
             if (x.id === 'cortex') refreshCortex($)
@@ -1504,28 +1526,66 @@ function draw($: any, e: any) {
     }
   }
 
-  if (tab === 'crew') {
-    const n = (s: string) => crew.filter((x) => x.status === s).length
+  if (tab === 'board') {
+    const me = boardCfg?.user || 'gonzalo'
+    const prio: Record<string, number> = { alta: 0, media: 1, baja: 2 }
+    const dot = (p: string) => span('● ', p === 'alta' ? C.red : p === 'media' ? C.amber : C.dim)
+    const who = (a: string | null) => span(a ? a[0].toUpperCase() + ' ' : '· ', a === me ? C.lime : C.cyan)
+    const mine = (x: BoardTask) => boardAll || x.assignee === me
+    const doing = board.tasks.filter((x) => x.status === 'en_curso' && mine(x)).sort((a, b) => a.position - b.position)
+    const todo = board.tasks.filter((x) => x.status === 'pendiente' && mine(x)).sort((a, b) => (prio[a.priority] ?? 9) - (prio[b.priority] ?? 9) || a.position - b.position)
+    const weekAgo = now() - 7 * 86400000
+    const done = board.tasks.filter((x) => x.status === 'hecho' && mine(x) && x.updatedAt >= weekAgo).sort((a, b) => b.updatedAt - a.updatedAt)
     out.push(
-      t([
-        span(`▲ ${n('blocked')} te necesita${n('blocked') === 1 ? '' : 'n'} `, n('blocked') ? C.pink : C.dim),
-        span(`✔ ${n('done')} `, n('done') ? C.lime : C.dim),
-        span(`◌ ${n('working')} `, n('working') ? C.purple : C.dim),
-        span(`· ${n('idle')} quietos`, C.dim),
+      card('board-head', '▦ TABLERO · ATENTY', C.purple, [
+        kv([span(`▶ ${doing.length} en curso  `, doing.length ? C.lime : C.dim), span(`□ ${todo.length} pendientes`, C.text)], [span(`✓ ${done.length}`, done.length ? C.lime : C.dim)]),
+        Box({
+          key: 'board-filter',
+          flexDirection: 'row',
+          children: [chip('board-mine', 'mías', !boardAll, C.tabBg, () => ((boardAll = false), $.ui.invalidate('ui.render'))), chip('board-all', 'todas', boardAll, C.tabBg, () => ((boardAll = true), $.ui.invalidate('ui.render')))],
+        }),
+        Input({
+          key: 'board-new',
+          placeholder: '+ nueva tarea para vos…',
+          value: boardDraft,
+          submitLabel: 'agregar',
+          onInput: (v: string) => (boardDraft = v),
+          onSubmit: (v: string) => {
+            const title = v.trim()
+            if (!title) return
+            boardDraft = ''
+            void boardAdd($, title)
+          },
+        }),
+        ...(board.err ? [t([span('✖ ' + board.err, C.red)])] : board.busy && !board.tasks.length ? [t([span('leyendo el tablero…', C.muted)])] : []),
       ]),
     )
-    const led = (s: string) => (s === 'blocked' ? [blink() ? '▲' : '△', C.pink] : s === 'done' ? ['✔', C.lime] : s === 'working' ? [SPIN[frame % 4], C.purple] : ['·', C.dim])
-    const rows = crew.slice(0, 18).map((x) => {
-      const [g, col] = led(x.status)
-      return Box({
-        flexDirection: 'column',
-        children: [
-          t([span(g + ' ', col), span(clip(x.where || '?', w - 12), x.status === 'idle' ? C.muted : C.text, { bold: x.status === 'blocked' }), span(` ${x.agent}${x.me ? ' ◂ vos' : ''}`, C.dim)]),
-          ...(x.title && x.status !== 'idle' ? [t([span('  ' + clip(x.title, w - 2), C.muted)])] : []),
-        ],
+    const taskRow = (x: BoardTask, actions: any[]) =>
+      Box({
+        key: 'bt-' + x.id,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        children: [t([dot(x.priority), who(x.assignee), span(clip(x.title, Math.max(8, w - 4 - actions.length * 4)), C.text)]), Box({ key: 'bt-act-' + x.id, flexDirection: 'row', children: actions })],
       })
-    })
-    out.push(scard('crew', '◈ EQUIPO NERV', C.purple, rows.length ? rows : [t([span('herdr no responde', C.muted)])], 14))
+    if (doing.length)
+      out.push(
+        card(
+          'board-doing',
+          '▶ EN CURSO',
+          C.lime,
+          doing.map((x) => taskRow(x, [chip('bd-ok-' + x.id, '✓', true, C.tabBg, () => void boardMove($, x.id, 'hecho')), chip('bd-back-' + x.id, '↩', false, C.tabBg, () => void boardMove($, x.id, 'pendiente'))])),
+        ),
+      )
+    out.push(
+      scard(
+        'board-todo',
+        `□ PENDIENTES · ${todo.length}`,
+        C.violet,
+        todo.length ? todo.map((x) => taskRow(x, [chip('bd-go-' + x.id, '▶', false, C.tabBg, () => void boardMove($, x.id, 'en_curso'))])) : [t([span('nada pendiente', C.muted)])],
+        12,
+      ),
+    )
+    if (done.length) out.push(card('board-done', `✓ HECHAS · últimos 7 días`, C.dim, done.slice(0, 4).map((x) => t([span('✓ ', C.lime), span(clip(x.title, w - 4), C.dim)]))))
   }
 
   const lvl = effortLevel()
@@ -2322,6 +2382,7 @@ export function register(on: any) {
     await loadEmails($)
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
+    if (tab === 'crew') tab = 'board'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
     ytRecent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
@@ -2330,13 +2391,13 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | equipo | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | tablero | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
     refreshPRs($)
     if (tab === 'hw') refreshHw($)
-    if (tab === 'crew') refreshCrew($)
+    if (tab === 'board') refreshBoard($)
     if (tab === 'forge') refreshForge($)
     if (tab === 'cortex') refreshCortex($)
     $.clock.every(125, () => {
@@ -2344,7 +2405,7 @@ export function register(on: any) {
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
-      if (tab === 'crew' && frame % 32 === 0) refreshCrew($)
+      if (tab === 'board' && frame % 240 === 0) refreshBoard($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
@@ -2418,11 +2479,11 @@ export function register(on: any) {
         void ytSearch($, q)
       } else await ytPoll($)
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
+    if (arg === 'hw' || arg === 'equipo' || arg === 'tablero' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
+      tab = arg === 'hw' ? 'hw' : arg === 'equipo' || arg === 'tablero' ? 'board' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
-      if (tab === 'crew') await refreshCrew($)
+      if (tab === 'board') await refreshBoard($)
       if (tab === 'forge') await refreshForge($)
       if (tab === 'nodd') await refreshNodd($)
       if (tab === 'cortex') await refreshCortex($)
