@@ -1263,7 +1263,7 @@ function draw($: any, e: any) {
         }),
       )
     })
-    if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `⌕ ${clip(yt.query, w - 8)}` : '⌕ RESULTADOS', C.violet, resRows, 14))
+    if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `⌕ ${clip(yt.query, w - 8)}` : '⌕ RESULTADOS', C.violet, resRows, 10))
   }
 
   if (tab === 'cortex') {
@@ -1755,7 +1755,7 @@ async function ytSearch($: any, q: string) {
   await $.store.set('ytRecent', ytRecent).catch(() => undefined)
   yt = { ...yt, busy: true, err: '', query: q }
   $.ui.invalidate('ui.render')
-  const r = await $.process.run(['yt-dlp', `ytsearch12:${q}`, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 30000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
+  const r = await $.process.run(['yt-dlp', `ytsearch25:${q}`, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 30000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
   try {
     const entries = JSON.parse(String(r.stdout || '{}')).entries || []
     yt.results = entries.filter((e: any) => e?.id).map((e: any) => ({ id: String(e.id), title: String(e.title || e.id), ch: String(e.channel || e.uploader || ''), d: Number(e.duration) || 0 }))
