@@ -131,6 +131,8 @@ let runDir = '/tmp'
 let ytDraft = ''
 let ytVolDraft: string | undefined
 let ytVolKey = 0
+const ytThumb: Record<string, string> = {}
+const ytThumbPath = (id: string) => `${home}/.cache/nerv/yt/${id}.png`
 let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
 const YT_COOKIES = 'chrome+gnomekeyring:Default'
@@ -143,7 +145,7 @@ const YT_FILL = [
   '  printf "%s\\n" "$c" | socat -t 1 - UNIX-CONNECT:"$sock" >/dev/null 2>&1 || exit 0',
   'done',
 ].join('\n')
-const ytState = () => `${home}/.local/state/nerv/yt.json`
+const ytState = () => `${runDir}/nerv-yt.json`
 const clockOf = (sec: number) => mmss((sec || 0) * 1000)
 let cortexKey = ''
 let cortexBusy = false
@@ -819,7 +821,7 @@ const effortCells = (cols: number) => {
 }
 
 function draw($: any, e: any) {
-  const { Box, Text, Raster, Button, Link, Input } = $.ui.resolve(e)
+  const { Box, Text, Raster, Button, Link, Input, Image } = $.ui.resolve(e)
   const dock = e.props.placement === 'dock' && (e.props.scroll?.bodyRows || 0) > 0
   for (const k of Object.keys(cardMax)) delete cardMax[k]
   const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
@@ -1202,114 +1204,137 @@ function draw($: any, e: any) {
   if (tab === 'yt') {
     const n = yt.now
     const cur = n ? yt.queue[n.idx] : undefined
-    const nowRows: any[] = [
-      Input({
-        key: 'yt-q',
-        placeholder: '⌕ buscar en YouTube…',
-        value: ytDraft,
-        submitLabel: 'buscar',
-        onInput: (v: string) => (ytDraft = v),
-        onSubmit: (v: string) => {
-          const q = v.trim()
-          if (q) void ytSearch($, q)
-        },
-      }),
-    ]
-    const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
-    nowRows.push(
-      Box({
-        key: 'yt-recent',
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        children: [
-          chip('yt-fav', '♥ me gusta', yt.query === 'me gusta', C.tabBg, () => void ytLoad($, ':ytfav', 'me gusta')),
-          chip('yt-rec', '★ para vos', yt.query === 'para vos', C.tabBg, () => void ytLoad($, ':ytrec', 'para vos')),
-          ...recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 16), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
-        ],
-      }),
-    )
+    const wrap2 = (txt: string, n2: number) => {
+      if (txt.length <= n2) return [txt]
+      let cut = txt.lastIndexOf(' ', n2)
+      if (cut < n2 * 0.5) cut = n2
+      return [txt.slice(0, cut).trimEnd(), clip(txt.slice(cut).trim(), n2)]
+    }
+    const nowRows: any[] = []
     if (n) {
-      nowRows.push(t([span(clip(cur?.title || n.title || 'cargando…', w - 2), C.text, { bold: true })]))
-      if (cur?.ch) nowRows.push(t([span(clip(cur.ch, w - 2), C.muted)]))
+      if (cur?.id) void ytThumbFor($, cur.id)
+      const thumb = !!Image && !!cur?.id && ytThumb[cur.id] === 'ok' && w >= 34
+      const tw = thumb ? w - 17 : w - 2
+      const info: any[] = wrap2(cur?.title || n.title || 'cargando…', tw).map((line) => t([span(line, C.text, { bold: true })]))
+      if (cur?.ch) info.push(t([span(clip(cur.ch, tw), C.muted)]))
+      nowRows.push(
+        thumb
+          ? Box({
+              key: 'yt-head',
+              flexDirection: 'row',
+              children: [
+                Image({ key: 'yt-thumb-' + cur!.id, source: { file: ytThumbPath(cur!.id), format: 'png' }, columns: 14, rows: 4, alt: '♪' }),
+                Box({ key: 'yt-info', flexDirection: 'column', marginLeft: 1, flexGrow: 1, children: info }),
+              ],
+            })
+          : Box({ key: 'yt-head', flexDirection: 'column', children: info }),
+      )
       if (n.dur) {
-        const bw = Math.max(6, w - 16)
+        const bw = Math.max(6, w - 3)
         const f = Math.min(bw, Math.round(((n.pos || 0) / n.dur) * bw))
-        nowRows.push(t([span('━'.repeat(f), C.lime), span('┈'.repeat(bw - f), C.dim), span(` ${clockOf(n.pos || 0)}/${clockOf(n.dur)}`, C.muted)]))
-      } else nowRows.push(t([span('cargando el audio…', C.amber)]))
+        const hue = n.pause ? C.amber : C.lime
+        nowRows.push(t([span('━'.repeat(f), hue), span('●', hue), span('┈'.repeat(bw - f), C.dim)]))
+        nowRows.push(kv([span(clockOf(n.pos || 0), C.muted)], [span(clockOf(n.dur), C.dim)]))
+      } else nowRows.push(t([span('◌ cargando el audio…', C.amber)]))
       nowRows.push(
         Box({
           key: 'yt-ctl',
           flexDirection: 'row',
           flexWrap: 'wrap',
+          justifyContent: 'space-between',
           children: [
-            chip('yt-prev', '⏮', true, C.tabBg, () => void ytCtl($, ['playlist-prev'])),
-            chip('yt-pause', n.pause ? '▶' : '⏸', true, C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
-            chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
-            chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
-          ],
-        }),
-        Box({
-          key: 'yt-vol',
-          flexDirection: 'row',
-          children: [
-            t([span('VOL ', C.muted)]),
-            chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', -5])),
-            t([span(' ')]),
             Box({
-              key: 'yt-vol-box',
-              width: 12,
+              key: 'yt-transport',
+              flexDirection: 'row',
               children: [
-                Input({
-                  key: 'yt-vol-in-' + ytVolKey,
-                  placeholder: '0-100',
-                  value: ytVolDraft ?? String(Math.round(n.vol ?? 0)),
-                  submitLabel: 'ok',
-                  onInput: (v: string) => (ytVolDraft = v),
-                  onSubmit: (v: string) => {
-                    ytVolDraft = undefined
-                    ytVolKey++
-                    const num = Number(String(v).replace(/[^\d.]/g, ''))
-                    if (String(v).trim() && Number.isFinite(num)) {
-                      const target = Math.max(0, Math.min(100, Math.round(num)))
-                      if (yt.now) yt.now.vol = target
-                      void ytCtl($, ['set_property', 'ao-volume', target])
-                    } else $.ui.invalidate('ui.render')
-                  },
-                }),
+                chip('yt-prev', '⏮', true, C.tabBg, () => void ytCtl($, ['playlist-prev'])),
+                chip('yt-pause', n.pause ? '▶' : '⏸', true, n.pause ? C.amber : C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
+                chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
+                chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
               ],
             }),
-            t([span('% ', C.muted)]),
-            chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', 5])),
+            Box({
+              key: 'yt-vol',
+              flexDirection: 'row',
+              children: [
+                chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', -5])),
+                Box({
+                  key: 'yt-vol-box',
+                  width: 8,
+                  paddingLeft: 1,
+                  children: [
+                    Input({
+                      key: 'yt-vol-in-' + ytVolKey,
+                      placeholder: '0-100',
+                      value: ytVolDraft ?? String(Math.round(n.vol ?? 0)),
+                      submitLabel: 'ok',
+                      onInput: (v: string) => (ytVolDraft = v),
+                      onSubmit: (v: string) => {
+                        ytVolDraft = undefined
+                        ytVolKey++
+                        const num = Number(String(v).replace(/[^\d.]/g, ''))
+                        if (String(v).trim() && Number.isFinite(num)) {
+                          const target = Math.max(0, Math.min(100, Math.round(num)))
+                          if (yt.now) yt.now.vol = target
+                          void ytCtl($, ['set_property', 'ao-volume', target])
+                        } else $.ui.invalidate('ui.render')
+                      },
+                    }),
+                  ],
+                }),
+                t([span('% ', C.muted)]),
+                chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', 5])),
+              ],
+            }),
           ],
         }),
       )
-      if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('después: ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 12), C.muted)]))
-    } else nowRows.push(t([span('nada sonando', C.muted)]))
-    nowRows.push(
-      Box({
-        key: 'yt-open',
-        flexDirection: 'row',
-        children: [
-          chip('yt-tui', '⧉ abrir yt', true, C.tabBg, () => void $.process.run(['setsid', '-f', 'uwsm-app', '--', 'ghostty', '--title=yt', '-e', `${home}/.local/bin/yt`, ...(yt.query ? [yt.query] : [])], { timeoutMs: 5000 }).catch(() => undefined)),
-        ],
-      }),
+      if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 4), C.dim)]))
+    } else nowRows.push(t([span('nada sonando · buscá algo abajo', C.muted)]))
+    out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n ? (n.pause ? C.amber : C.lime) : C.purple, nowRows))
+    const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
+    out.push(
+      card('yt-search', '⌕ BUSCAR', C.violet, [
+        Input({
+          key: 'yt-q',
+          placeholder: 'tema, artista, playlist…',
+          value: ytDraft,
+          submitLabel: 'buscar',
+          onInput: (v: string) => (ytDraft = v),
+          onSubmit: (v: string) => {
+            const q = v.trim()
+            if (q) void ytSearch($, q)
+          },
+        }),
+        Box({
+          key: 'yt-chips',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [
+            chip('yt-fav', '♥ me gusta', yt.query === 'me gusta', C.tabBg, () => void ytLoad($, ':ytfav', 'me gusta')),
+            chip('yt-rec', '★ para vos', yt.query === 'para vos', C.tabBg, () => void ytLoad($, ':ytrec', 'para vos')),
+            ...recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 14), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
+            chip('yt-tui', '⧉ abrir yt', false, C.tabBg, () => void $.process.run(['setsid', '-f', 'uwsm-app', '--', 'ghostty', '--title=yt', '-e', `${home}/.local/bin/yt`, ...(yt.query ? [yt.query] : [])], { timeoutMs: 5000 }).catch(() => undefined)),
+          ],
+        }),
+      ]),
     )
-    out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n && !n.pause ? C.lime : C.purple, nowRows))
-    const resRows: any[] = yt.busy ? [t([span(`buscando «${clip(yt.query, w - 14)}»…`, C.amber)])] : yt.err ? [t([span('✖ ' + yt.err, C.red)])] : []
+    const resRows: any[] = yt.busy ? [t([span(`◌ buscando «${clip(yt.query, w - 16)}»…`, C.amber)])] : yt.err ? [t([span('✖ ' + yt.err, C.red)])] : []
     yt.results.forEach((r, i) => {
       const playing = !!cur && cur.id === r.id
       resRows.push(
         Box({
           key: 'yt-r-' + r.id,
           flexDirection: 'row',
+          justifyContent: 'space-between',
           children: [
-            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : '·'} ${clip(r.title, Math.max(8, w - 12))}`, plain: true, dimColor: false, onPress: () => void ytPlay($, i) }),
-            t([span(r.d ? ' ' + clockOf(r.d) : '', C.dim)]),
+            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : String(i + 1).padStart(2)} ${clip(r.title, Math.max(8, w - 13))}`, plain: true, dimColor: !playing && !!cur, onPress: () => void ytPlay($, i) }),
+            t([span(r.d ? clockOf(r.d) : '', playing ? C.lime : C.dim)]),
           ],
         }),
       )
     })
-    if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `⌕ ${clip(yt.query, w - 8)}` : '⌕ RESULTADOS', C.violet, resRows, 10))
+    if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `≡ ${clip(yt.query.toUpperCase(), w - 10)}` : '≡ RESULTADOS', C.violet, resRows, 10))
   }
 
   if (tab === 'cortex') {
@@ -1832,7 +1857,6 @@ async function ytPlay($: any, i: number) {
     .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${fast ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, fast ? direct : `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
     .catch(() => undefined)
   if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
-  await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
   await $.fs.write(ytState(), JSON.stringify({ queue: list }) + '\n').catch(() => undefined)
   $.ui.invalidate('ui.render')
 }
@@ -1854,6 +1878,19 @@ async function ytPoll($: any) {
       } catch {}
     }
     yt.now = { pos, dur, pause, idx: Number(idx) || 0, vol, title }
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function ytThumbFor($: any, id: string) {
+  if (ytThumb[id] || !/^[\w-]{6,20}$/.test(id)) return
+  ytThumb[id] = 'loading'
+  if (await $.fs.stat(ytThumbPath(id)).catch(() => undefined)) ytThumb[id] = 'ok'
+  else {
+    const r = await $.process
+      .run(['bash', '-c', 'mkdir -p "$1" && curl -fsSL -m 15 "https://i.ytimg.com/vi/$2/mqdefault.jpg" -o "$1/$2.jpg" && magick "$1/$2.jpg" -resize 160x90 "$1/$2.png" && rm -f "$1/$2.jpg"', 'nerv-thumb', `${home}/.cache/nerv/yt`, id], { timeoutMs: 30000 })
+      .catch(() => undefined)
+    ytThumb[id] = r?.exitCode === 0 ? 'ok' : 'fail'
   }
   $.ui.invalidate('ui.render')
 }
