@@ -128,6 +128,8 @@ let blue = { ars: 1555, live: false, at: 0 }
 type YtItem = { id: string; title: string; ch: string; d: number }
 let yt: { results: YtItem[]; queue: YtItem[]; query: string; busy: boolean; err: string; now?: { pos?: number; dur?: number; pause?: boolean; idx: number; vol?: number; title?: string } } = { results: [], queue: [], query: '', busy: false, err: '' }
 let runDir = '/tmp'
+let ytDraft = ''
+let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
 const ytState = () => `${home}/.local/state/nerv/yt.json`
 const clockOf = (sec: number) => mmss((sec || 0) * 1000)
@@ -805,7 +807,7 @@ const effortCells = (cols: number) => {
 }
 
 function draw($: any, e: any) {
-  const { Box, Text, Raster, Button, Link } = $.ui.resolve(e)
+  const { Box, Text, Raster, Button, Link, Input } = $.ui.resolve(e)
   const dock = e.props.placement === 'dock' && (e.props.scroll?.bodyRows || 0) > 0
   for (const k of Object.keys(cardMax)) delete cardMax[k]
   const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
@@ -1188,7 +1190,29 @@ function draw($: any, e: any) {
   if (tab === 'yt') {
     const n = yt.now
     const cur = n ? yt.queue[n.idx] : undefined
-    const nowRows: any[] = []
+    const nowRows: any[] = [
+      Input({
+        key: 'yt-q',
+        placeholder: '⌕ buscar en YouTube…',
+        value: ytDraft,
+        submitLabel: 'buscar',
+        onInput: (v: string) => (ytDraft = v),
+        onSubmit: (v: string) => {
+          const q = v.trim()
+          if (q) void ytSearch($, q)
+        },
+      }),
+    ]
+    const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
+    if (recentChips.length)
+      nowRows.push(
+        Box({
+          key: 'yt-recent',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 16), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
+        }),
+      )
     if (n) {
       nowRows.push(t([span(clip(cur?.title || n.title || 'cargando…', w - 2), C.text, { bold: true })]))
       if (cur?.ch) nowRows.push(t([span(clip(cur.ch, w - 2), C.muted)]))
@@ -1220,8 +1244,6 @@ function draw($: any, e: any) {
         key: 'yt-open',
         flexDirection: 'row',
         children: [
-          chip('yt-search', '⌕ buscar…', true, C.tabBg, () => void ytAsk($)),
-          t([span(' ')]),
           chip('yt-tui', '⧉ abrir yt', true, C.tabBg, () => void $.process.run(['setsid', '-f', 'uwsm-app', '--', 'ghostty', '--title=yt', '-e', `${home}/.local/bin/yt`, ...(yt.query ? [yt.query] : [])], { timeoutMs: 5000 }).catch(() => undefined)),
         ],
       }),
@@ -1729,6 +1751,8 @@ async function ytSend($: any, cmds: any[][]) {
 }
 
 async function ytSearch($: any, q: string) {
+  ytRecent = [q, ...ytRecent.filter((x) => x !== q)].slice(0, 5)
+  await $.store.set('ytRecent', ytRecent).catch(() => undefined)
   yt = { ...yt, busy: true, err: '', query: q }
   $.ui.invalidate('ui.render')
   const r = await $.process.run(['yt-dlp', `ytsearch12:${q}`, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 30000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
@@ -1741,15 +1765,6 @@ async function ytSearch($: any, q: string) {
   }
   yt.busy = false
   $.ui.invalidate('ui.render')
-}
-
-async function ytAsk($: any) {
-  const recent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
-  const pick = await $.ui.ask('¿Qué querés escuchar? Escribí la búsqueda en «Other».', { options: [...recent.slice(0, 3), 'Cancelar'], header: 'youtube' }).catch(() => 'Cancelar')
-  const q = String(pick || '').trim()
-  if (!q || q === 'Cancelar') return
-  await $.store.set('ytRecent', [q, ...recent.filter((x) => x !== q)].slice(0, 5)).catch(() => undefined)
-  await ytSearch($, q)
 }
 
 async function ytPlay($: any, i: number) {
@@ -2214,6 +2229,7 @@ export function register(on: any) {
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
+    ytRecent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
     await syncPrefs($)
     const unit = home ? await $.fs.read(`${home}/.config/systemd/user/jcode-rail.service`).catch(() => '') : ''
@@ -2303,8 +2319,10 @@ export function register(on: any) {
       tab = 'yt'
       await $.store.set('tab', tab).catch(() => undefined)
       const q = String(e.args || '').trim().slice(2).trim()
-      if (q) void ytSearch($, q)
-      else await ytPoll($)
+      if (q) {
+        ytDraft = q
+        void ytSearch($, q)
+      } else await ytPoll($)
     }
     if (arg === 'hw' || arg === 'equipo' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
       tab = arg === 'hw' ? 'hw' : arg === 'equipo' ? 'crew' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
