@@ -129,6 +129,8 @@ type YtItem = { id: string; title: string; ch: string; d: number }
 let yt: { results: YtItem[]; queue: YtItem[]; query: string; busy: boolean; err: string; now?: { pos?: number; dur?: number; pause?: boolean; idx: number; vol?: number; title?: string } } = { results: [], queue: [], query: '', busy: false, err: '' }
 let runDir = '/tmp'
 let ytDraft = ''
+let ytVolDraft: string | undefined
+let ytVolKey = 0
 let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
 const YT_COOKIES = 'chrome+gnomekeyring:Default'
@@ -1244,8 +1246,39 @@ function draw($: any, e: any) {
             chip('yt-pause', n.pause ? '▶' : '⏸', true, C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
             chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
             chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
+          ],
+        }),
+        Box({
+          key: 'yt-vol',
+          flexDirection: 'row',
+          children: [
+            t([span('VOL ', C.muted)]),
             chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', -5])),
-            t([span(` ${Math.round(n.vol ?? 0)}% `, C.muted)]),
+            t([span(' ')]),
+            Box({
+              key: 'yt-vol-box',
+              width: 12,
+              children: [
+                Input({
+                  key: 'yt-vol-in-' + ytVolKey,
+                  placeholder: '0-100',
+                  value: ytVolDraft ?? String(Math.round(n.vol ?? 0)),
+                  submitLabel: 'ok',
+                  onInput: (v: string) => (ytVolDraft = v),
+                  onSubmit: (v: string) => {
+                    ytVolDraft = undefined
+                    ytVolKey++
+                    const num = Number(String(v).replace(/[^\d.]/g, ''))
+                    if (String(v).trim() && Number.isFinite(num)) {
+                      const target = Math.max(0, Math.min(100, Math.round(num)))
+                      if (yt.now) yt.now.vol = target
+                      void ytCtl($, ['set_property', 'ao-volume', target])
+                    } else $.ui.invalidate('ui.render')
+                  },
+                }),
+              ],
+            }),
+            t([span('% ', C.muted)]),
             chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', 5])),
           ],
         }),
