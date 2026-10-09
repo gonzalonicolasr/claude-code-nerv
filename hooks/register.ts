@@ -132,7 +132,6 @@ let ytDraft = ''
 let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
 const YT_COOKIES = 'chrome+gnomekeyring:Default'
-let sysVol: { level: number; muted: boolean } | undefined
 const YT_FILL = [
   'sock=$1; ck=$2; shift 2',
   'for id in "$@"; do',
@@ -1245,9 +1244,9 @@ function draw($: any, e: any) {
             chip('yt-pause', n.pause ? '▶' : '⏸', true, C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
             chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
             chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
-            chip('yt-voldown', '−', true, C.tabBg, () => void sysVolume($, '5%-')),
-            t([span(sysVol?.muted ? ' mudo ' : ` ${Math.round(n.vol ?? 0)}% `, sysVol?.muted ? C.red : C.muted)]),
-            chip('yt-volup', '+', true, C.tabBg, () => void sysVolume($, '5%+')),
+            chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', -5])),
+            t([span(` ${Math.round(n.vol ?? 0)}% `, C.muted)]),
+            chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', 5])),
           ],
         }),
       )
@@ -1812,9 +1811,7 @@ async function ytPoll($: any) {
     return
   }
   const [pos, dur, pause, idx, aoVol, title] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'ao-volume'], ['get_property', 'media-title']]).catch(() => [])
-  if (typeof aoVol === 'number' && aoVol < 99) await ytSend($, [['set_property', 'ao-volume', 100]]).catch(() => undefined)
-  await readSysVol($)
-  const vol = sysVol ? sysVol.level * 100 : undefined
+  const vol = typeof aoVol === 'number' ? aoVol : undefined
   if (idx === undefined && pause === undefined) {
     yt.now = undefined
   } else {
@@ -1825,18 +1822,6 @@ async function ytPoll($: any) {
     }
     yt.now = { pos, dur, pause, idx: Number(idx) || 0, vol, title }
   }
-  $.ui.invalidate('ui.render')
-}
-
-async function readSysVol($: any) {
-  const r = await $.process.run(['wpctl', 'get-volume', '@DEFAULT_AUDIO_SINK@'], { timeoutMs: 3000 }).catch(() => undefined)
-  const m = String(r?.stdout || '').match(/Volume:\s*([\d.]+)/)
-  sysVol = m ? { level: Number(m[1]), muted: /MUTED/.test(String(r?.stdout)) } : undefined
-}
-
-async function sysVolume($: any, step: string) {
-  await $.process.run(['wpctl', 'set-volume', '-l', '1.0', '@DEFAULT_AUDIO_SINK@', step], { timeoutMs: 3000 }).catch(() => undefined)
-  await readSysVol($)
   $.ui.invalidate('ui.render')
 }
 
