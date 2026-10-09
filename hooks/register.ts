@@ -141,15 +141,22 @@ let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
 const YT_COOKIES = 'chrome+gnomekeyring:Default'
 const YT_FILL = [
-  'sock=$1; ck=$2; shift 2',
+  'sock=$1; ck=$2; map=$3; shift 3',
   'for id in "$@"; do',
   '  u=$(yt-dlp --cookies-from-browser "$ck" -f bestaudio/best -g --no-warnings "https://youtu.be/$id" 2>/dev/null | head -1)',
   '  [ -S "$sock" ] || exit 0',
   '  case "$u" in http*) c="{\\"command\\":[\\"loadfile\\",\\"$u\\",\\"append\\"]}" ;; *) c="{\\"command\\":[\\"loadfile\\",\\"https://youtu.be/$id\\",\\"append\\",-1,\\"ytdl=yes\\"]}" ;; esac',
+  '  case "$u" in http*) printf "%s\\t%s\\n" "$u" "$id" >> "$map" ;; esac',
   '  printf "%s\\n" "$c" | socat -t 1 - UNIX-CONNECT:"$sock" >/dev/null 2>&1 || exit 0',
   'done',
 ].join('\n')
 const ytState = () => `${runDir}/nerv-yt.json`
+const ytMapPath = () => `${runDir}/nerv-yt.map`
+let ytMap: Record<string, string> = {}
+let ytItems: Record<string, YtItem> = {}
+let ytFilesSize = -1
+let ytLegacy: YtItem[] = []
+let ytNote = ''
 const clockOf = (sec: number) => mmss((sec || 0) * 1000)
 let cortexKey = ''
 let cortexBusy = false
@@ -1311,9 +1318,31 @@ function draw($: any, e: any) {
           ],
         }),
       )
-      if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 4), C.dim)]))
+      if (ytNote) nowRows.push(t([span('◌ ' + ytNote, C.amber)]))
+      else if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 4), C.dim)]))
     } else nowRows.push(t([span('nada sonando · buscá algo abajo', C.muted)]))
     out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n ? (n.pause ? C.amber : C.lime) : C.purple, nowRows))
+    if (n && yt.queue.length > 1)
+      out.push(
+        scard(
+          'yt-queue',
+          `≡ COLA · ${n.idx + 1}/${yt.queue.length}`,
+          n.pause ? C.amber : C.lime,
+          yt.queue.map((q, k) => {
+            const on = k === n.idx
+            return Box({
+              key: 'yq-' + k,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              children: [
+                Button({ key: 'yq-go-' + k, label: `${on ? '▶' : String(k + 1).padStart(2)} ${clip(q.title, Math.max(8, w - 12))}`, plain: true, dimColor: k < n.idx, onPress: () => void ytCtl($, ['playlist-play-index', k]) }),
+                on ? t([span(q.d ? clockOf(q.d) : '', C.lime)]) : chip('yq-rm-' + k, '✕', false, C.tabBg, () => void ytCtl($, ['playlist-remove', k])),
+              ],
+            })
+          }),
+          8,
+        ),
+      )
     const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
     out.push(
       card('yt-search', '⌕ BUSCAR', C.violet, [
@@ -1350,8 +1379,8 @@ function draw($: any, e: any) {
           flexDirection: 'row',
           justifyContent: 'space-between',
           children: [
-            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : String(i + 1).padStart(2)} ${clip(r.title, Math.max(8, w - 13))}`, plain: true, dimColor: !playing && !!cur, onPress: () => void ytPlay($, i) }),
-            t([span(r.d ? clockOf(r.d) : '', playing ? C.lime : C.dim)]),
+            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : String(i + 1).padStart(2)} ${clip(r.title, Math.max(8, w - 17))}`, plain: true, dimColor: false, onPress: () => void ytPlay($, i) }),
+            Box({ key: 'yt-r-side-' + r.id, flexDirection: 'row', children: [t([span(r.d ? clockOf(r.d) + ' ' : '', playing ? C.lime : C.dim)]), chip('yt-add-' + r.id, '+', false, C.tabBg, () => void ytInsert($, r, false))] }),
           ],
         }),
       )
@@ -1903,40 +1932,92 @@ async function ytLoad($: any, target: string, label: string) {
   $.ui.invalidate('ui.render')
 }
 
+async function ytResolve($: any, id: string) {
+  const r = await $.process.run(['yt-dlp', '--cookies-from-browser', YT_COOKIES, '-f', 'bestaudio/best', '-g', '--no-warnings', `https://youtu.be/${id}`], { timeoutMs: 30000 }).catch(() => undefined)
+  const direct = String(r?.stdout || '').trim().split('\n')[0]
+  return direct.startsWith('http') ? direct : ''
+}
+
+async function ytRemember($: any, list: YtItem[], url = '', id = '') {
+  let items: Record<string, YtItem> = {}
+  try {
+    items = JSON.parse((await $.fs.read(ytState()).catch(() => '')) || '{}').items || {}
+  } catch {}
+  for (const x of list) items[x.id] = x
+  ytItems = items
+  await $.fs.write(ytState(), JSON.stringify({ items }) + '\n').catch(() => undefined)
+  if (url && id) await $.process.run(['bash', '-c', 'printf "%s\\t%s\\n" "$1" "$2" >> "$3"', 'nerv-yt-map', url, id, ytMapPath()], { timeoutMs: 5000 }).catch(() => undefined)
+}
+
 async function ytPlay($: any, i: number) {
+  if (yt.now) return ytInsert($, yt.results[i], true)
   const list = yt.results.slice(i, i + 25)
   if (!list.length) return
   yt.queue = list
   yt.now = { idx: 0, title: list[0].title }
   $.ui.invalidate('ui.render')
   await ytSend($, [['quit']]).catch(() => undefined)
-  const first = await $.process.run(['yt-dlp', '--cookies-from-browser', YT_COOKIES, '-f', 'bestaudio/best', '-g', '--no-warnings', `https://youtu.be/${list[0].id}`], { timeoutMs: 30000 }).catch(() => undefined)
-  const direct = String(first?.stdout || '').trim().split('\n')[0]
-  const fast = direct.startsWith('http')
+  await $.process.run(['rm', '-f', ytMapPath()], { timeoutMs: 5000 }).catch(() => undefined)
+  const direct = await ytResolve($, list[0].id)
+  await ytRemember($, list, direct, list[0].id)
   await $.process
-    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${fast ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, fast ? direct : `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
+    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${direct ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, direct || `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
     .catch(() => undefined)
-  if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
-  await $.fs.write(ytState(), JSON.stringify({ queue: list }) + '\n').catch(() => undefined)
+  if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ytMapPath(), ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
   $.ui.invalidate('ui.render')
+}
+
+async function ytInsert($: any, item: YtItem | undefined, playNow: boolean) {
+  if (!item) return
+  if (!yt.now) {
+    const i = yt.results.findIndex((x) => x.id === item.id)
+    if (playNow && i >= 0) return ytPlay($, i)
+    yt.results = [item, ...yt.results.filter((x) => x.id !== item.id)]
+    return ytPlay($, 0)
+  }
+  ytNote = playNow ? `poniendo «${clip(item.title, 28)}»…` : `sumando «${clip(item.title, 28)}» a la cola…`
+  $.ui.invalidate('ui.render')
+  const direct = await ytResolve($, item.id)
+  await ytRemember($, [item], direct, item.id)
+  const load = direct ? ['loadfile', direct, playNow ? 'insert-next' : 'append'] : ['loadfile', `https://youtu.be/${item.id}`, playNow ? 'insert-next' : 'append', -1, 'ytdl=yes']
+  await ytSend($, playNow ? [load, ['playlist-next']] : [load]).catch(() => undefined)
+  ytNote = ''
+  await ytPoll($)
 }
 
 async function ytPoll($: any) {
   const alive = await $.fs.stat(ytSock()).catch(() => undefined)
   if (!alive) {
-    if (yt.now) ((yt.now = undefined), $.ui.invalidate('ui.render'))
+    if (yt.now) ((yt.now = undefined), (yt.queue = []), $.ui.invalidate('ui.render'))
     return
   }
-  const [pos, dur, pause, idx, aoVol, title] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'ao-volume'], ['get_property', 'media-title']]).catch(() => [])
+  const [pos, dur, pause, idx, aoVol, title, list] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'ao-volume'], ['get_property', 'media-title'], ['get_property', 'playlist']]).catch(() => [])
   const vol = typeof aoVol === 'number' ? aoVol : undefined
   if (idx === undefined && pause === undefined) {
     yt.now = undefined
+    yt.queue = []
   } else {
-    if (!yt.queue.length) {
+    const mapStat = await $.fs.stat(ytMapPath()).catch(() => undefined)
+    const stateStat = await $.fs.stat(ytState()).catch(() => undefined)
+    const size = (mapStat?.size || 0) + (stateStat?.size || 0)
+    if (size !== ytFilesSize) {
+      ytFilesSize = size
+      ytMap = {}
+      for (const line of String((await $.fs.read(ytMapPath()).catch(() => '')) || '').split('\n')) {
+        const [u, id] = line.split('\t')
+        if (u && id) ytMap[u] = id
+      }
       try {
-        yt.queue = JSON.parse((await $.fs.read(ytState()).catch(() => '')) || '{}').queue || []
+        const st = JSON.parse((await $.fs.read(ytState()).catch(() => '')) || '{}')
+        ytItems = st.items || {}
+        ytLegacy = Array.isArray(st.queue) ? st.queue : []
       } catch {}
     }
+    yt.queue = (Array.isArray(list) ? list : []).map((e: any, k: number) => {
+      const f = String(e?.filename || '')
+      const id = ytMap[f] || (f.match(/youtu\.be\/([\w-]{6,20})/) || [])[1] || ''
+      return ytItems[id] || ytLegacy[k] || { id, title: e?.title || 'tema de la cola', ch: '', d: 0 }
+    })
     yt.now = { pos, dur, pause, idx: Number(idx) || 0, vol, title }
   }
   $.ui.invalidate('ui.render')
