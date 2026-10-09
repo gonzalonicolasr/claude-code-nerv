@@ -131,6 +131,17 @@ let runDir = '/tmp'
 let ytDraft = ''
 let ytRecent: string[] = []
 const ytSock = () => `${runDir}/nerv-yt.sock`
+const YT_COOKIES = 'chrome+gnomekeyring:Default'
+let sysVol: { level: number; muted: boolean } | undefined
+const YT_FILL = [
+  'sock=$1; ck=$2; shift 2',
+  'for id in "$@"; do',
+  '  u=$(yt-dlp --cookies-from-browser "$ck" -f bestaudio/best -g --no-warnings "https://youtu.be/$id" 2>/dev/null | head -1)',
+  '  [ -S "$sock" ] || exit 0',
+  '  case "$u" in http*) c="{\\"command\\":[\\"loadfile\\",\\"$u\\",\\"append\\"]}" ;; *) c="{\\"command\\":[\\"loadfile\\",\\"https://youtu.be/$id\\",\\"append\\",-1,\\"ytdl=yes\\"]}" ;; esac',
+  '  printf "%s\\n" "$c" | socat -t 1 - UNIX-CONNECT:"$sock" >/dev/null 2>&1 || exit 0',
+  'done',
+].join('\n')
 const ytState = () => `${home}/.local/state/nerv/yt.json`
 const clockOf = (sec: number) => mmss((sec || 0) * 1000)
 let cortexKey = ''
@@ -1204,15 +1215,18 @@ function draw($: any, e: any) {
       }),
     ]
     const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
-    if (recentChips.length)
-      nowRows.push(
-        Box({
-          key: 'yt-recent',
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          children: recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 16), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
-        }),
-      )
+    nowRows.push(
+      Box({
+        key: 'yt-recent',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        children: [
+          chip('yt-fav', '♥ me gusta', yt.query === 'me gusta', C.tabBg, () => void ytLoad($, ':ytfav', 'me gusta')),
+          chip('yt-rec', '★ para vos', yt.query === 'para vos', C.tabBg, () => void ytLoad($, ':ytrec', 'para vos')),
+          ...recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 16), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
+        ],
+      }),
+    )
     if (n) {
       nowRows.push(t([span(clip(cur?.title || n.title || 'cargando…', w - 2), C.text, { bold: true })]))
       if (cur?.ch) nowRows.push(t([span(clip(cur.ch, w - 2), C.muted)]))
@@ -1231,9 +1245,9 @@ function draw($: any, e: any) {
             chip('yt-pause', n.pause ? '▶' : '⏸', true, C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
             chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
             chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
-            chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'volume', -10])),
-            t([span(` ${Math.round(n.vol ?? 0)}% `, C.muted)]),
-            chip('yt-volup', '+', true, C.tabBg, () => void ytCtl($, ['add', 'volume', 10])),
+            chip('yt-voldown', '−', true, C.tabBg, () => void sysVolume($, '5%-')),
+            t([span(sysVol?.muted ? ' mudo ' : ` ${Math.round(n.vol ?? 0)}% `, sysVol?.muted ? C.red : C.muted)]),
+            chip('yt-volup', '+', true, C.tabBg, () => void sysVolume($, '5%+')),
           ],
         }),
       )
@@ -1753,9 +1767,14 @@ async function ytSend($: any, cmds: any[][]) {
 async function ytSearch($: any, q: string) {
   ytRecent = [q, ...ytRecent.filter((x) => x !== q)].slice(0, 5)
   await $.store.set('ytRecent', ytRecent).catch(() => undefined)
-  yt = { ...yt, busy: true, err: '', query: q }
+  await ytLoad($, `ytsearch25:${q}`, q)
+}
+
+async function ytLoad($: any, target: string, label: string) {
+  yt = { ...yt, busy: true, err: '', query: label }
   $.ui.invalidate('ui.render')
-  const r = await $.process.run(['yt-dlp', `ytsearch25:${q}`, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 30000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
+  const account = target.startsWith(':') ? ['--cookies-from-browser', YT_COOKIES, '--playlist-end', '25'] : []
+  const r = await $.process.run(['yt-dlp', ...account, target, '--flat-playlist', '-J', '--no-warnings'], { timeoutMs: 60000 }).catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
   try {
     const entries = JSON.parse(String(r.stdout || '{}')).entries || []
     yt.results = entries.filter((e: any) => e?.id).map((e: any) => ({ id: String(e.id), title: String(e.title || e.id), ch: String(e.channel || e.uploader || ''), d: Number(e.duration) || 0 }))
@@ -1770,12 +1789,17 @@ async function ytSearch($: any, q: string) {
 async function ytPlay($: any, i: number) {
   const list = yt.results.slice(i, i + 25)
   if (!list.length) return
-  await ytSend($, [['quit']]).catch(() => undefined)
-  await $.process
-    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=70', `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', ...list.map((x) => `https://youtu.be/${x.id}`)], { timeoutMs: 5000 })
-    .catch(() => undefined)
   yt.queue = list
   yt.now = { idx: 0, title: list[0].title }
+  $.ui.invalidate('ui.render')
+  await ytSend($, [['quit']]).catch(() => undefined)
+  const first = await $.process.run(['yt-dlp', '--cookies-from-browser', YT_COOKIES, '-f', 'bestaudio/best', '-g', '--no-warnings', `https://youtu.be/${list[0].id}`], { timeoutMs: 30000 }).catch(() => undefined)
+  const direct = String(first?.stdout || '').trim().split('\n')[0]
+  const fast = direct.startsWith('http')
+  await $.process
+    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${fast ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, fast ? direct : `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
+    .catch(() => undefined)
+  if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
   await $.process.run(['mkdir', '-p', `${home}/.local/state/nerv`], { timeoutMs: 5000 }).catch(() => undefined)
   await $.fs.write(ytState(), JSON.stringify({ queue: list }) + '\n').catch(() => undefined)
   $.ui.invalidate('ui.render')
@@ -1787,7 +1811,10 @@ async function ytPoll($: any) {
     if (yt.now) ((yt.now = undefined), $.ui.invalidate('ui.render'))
     return
   }
-  const [pos, dur, pause, idx, vol, title] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'volume'], ['get_property', 'media-title']]).catch(() => [])
+  const [pos, dur, pause, idx, aoVol, title] = await ytSend($, [['get_property', 'time-pos'], ['get_property', 'duration'], ['get_property', 'pause'], ['get_property', 'playlist-pos'], ['get_property', 'ao-volume'], ['get_property', 'media-title']]).catch(() => [])
+  if (typeof aoVol === 'number' && aoVol < 99) await ytSend($, [['set_property', 'ao-volume', 100]]).catch(() => undefined)
+  await readSysVol($)
+  const vol = sysVol ? sysVol.level * 100 : undefined
   if (idx === undefined && pause === undefined) {
     yt.now = undefined
   } else {
@@ -1798,6 +1825,18 @@ async function ytPoll($: any) {
     }
     yt.now = { pos, dur, pause, idx: Number(idx) || 0, vol, title }
   }
+  $.ui.invalidate('ui.render')
+}
+
+async function readSysVol($: any) {
+  const r = await $.process.run(['wpctl', 'get-volume', '@DEFAULT_AUDIO_SINK@'], { timeoutMs: 3000 }).catch(() => undefined)
+  const m = String(r?.stdout || '').match(/Volume:\s*([\d.]+)/)
+  sysVol = m ? { level: Number(m[1]), muted: /MUTED/.test(String(r?.stdout)) } : undefined
+}
+
+async function sysVolume($: any, step: string) {
+  await $.process.run(['wpctl', 'set-volume', '-l', '1.0', '@DEFAULT_AUDIO_SINK@', step], { timeoutMs: 3000 }).catch(() => undefined)
+  await readSysVol($)
   $.ui.invalidate('ui.render')
 }
 
