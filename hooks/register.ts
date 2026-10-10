@@ -1621,68 +1621,79 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'live') {
+    const nat = (aspect: number) => Math.max(4, Math.min(16, Math.round((w - 4) * 0.47 * aspect)))
+    const sz: Record<string, number> = { cam: nat(live.text ? 272 / 426 : 246 / 426), ip: nat(1152 / 1512) }
+    const slot = (key: string) => Box({ key: `live-slot-${key}`, height: sz[key] })
     const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
     const rec = !!(live.cam.on || live.ip.on)
-    out.push(
-      card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
-        kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
-        kv([span('◇ Discord ', C.text)], [span(live.discord ? 'abierto · sin dato de espectadores' : 'cerrado', live.discord ? C.muted : C.dim)]),
-        Box({
-          key: 'live-ctl',
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          children: [chip('live-mic', live.mic.muted ? '🎙 activar' : '🎙 silenciar', live.mic.muted, live.mic.muted ? C.red : C.tabBg, () => void liveRun($, ['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']))],
-        }),
-      ]),
-    )
-    out.push(
-      card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
-        ...(live.cam.on ? [stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
-        Box({
-          key: 'live-cam-ctl',
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
-        }),
-        Input({
-          key: 'live-text-' + liveTextKey,
-          placeholder: '▭ texto de la banda',
-          value: liveText ?? live.text,
-          submitLabel: 'poner',
-          onInput: (v: string) => (liveText = v),
-          onSubmit: (v: string) => {
-            liveText = undefined
-            liveTextKey++
-            live.text = v.trim()
-            void liveRun($, [`${home}/.local/bin/camoverlay`, '--text', v.trim()])
-          },
-        }),
-      ]),
-    )
-    const ip = live.ip
-    const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
-    out.push(
-      card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
-        ...(ip.on ? [stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
-        ip.reach
-          ? kv([span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)], [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)])
-          : t([span('DroidCam no responde en el celu', C.dim)]),
-        Box({
-          key: 'live-ip-ctl',
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          children: [
-            chip('live-ip-tg', ip.on ? '■ cerrar' : '▶ abrir', ip.on, ip.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/iphonecam`])),
-            ...(ip.on
-              ? [
-                  chip('live-ip-priv', ip.scene ? '◉ mostrar' : '◌ tapar', !!ip.scene, ip.scene ? C.violet : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, ...(ip.scene ? ['--scene', ip.scene] : ['--privacy'])])),
-                  chip('live-ip-blur', ip.blur ? '◍ sin blur' : '◍ blur', ip.blur, ip.blur ? C.cyan : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, '--blur'])),
-                ]
-              : []),
-          ],
-        }),
-      ]),
-    )
+    const at = out.length
+    for (let pass = 0; pass < 2; pass++) {
+      out.length = at
+      out.push(
+        card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
+          kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
+          kv([span('◇ Discord ', C.text)], [span(live.discord ? 'abierto · sin dato de espectadores' : 'cerrado', live.discord ? C.muted : C.dim)]),
+          Box({
+            key: 'live-ctl',
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            children: [chip('live-mic', live.mic.muted ? '🎙 activar' : '🎙 silenciar', live.mic.muted, live.mic.muted ? C.red : C.tabBg, () => void liveRun($, ['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']))],
+          }),
+        ]),
+      )
+      out.push(
+        card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
+          ...(live.cam.on ? [slot('cam'), stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
+          Box({
+            key: 'live-cam-ctl',
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
+          }),
+          Input({
+            key: 'live-text-' + liveTextKey,
+            placeholder: '▭ texto de la banda',
+            value: liveText ?? live.text,
+            submitLabel: 'poner',
+            onInput: (v: string) => (liveText = v),
+            onSubmit: (v: string) => {
+              liveText = undefined
+              liveTextKey++
+              live.text = v.trim()
+              void liveRun($, [`${home}/.local/bin/camoverlay`, '--text', v.trim()])
+            },
+          }),
+        ]),
+      )
+      const ip = live.ip
+      const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
+      out.push(
+        card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
+          ...(ip.on ? [slot('ip'), stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
+          ip.reach
+            ? kv([span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)], [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)])
+            : t([span('DroidCam no responde en el celu', C.dim)]),
+          Box({
+            key: 'live-ip-ctl',
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            children: [
+              chip('live-ip-tg', ip.on ? '■ cerrar' : '▶ abrir', ip.on, ip.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/iphonecam`])),
+              ...(ip.on
+                ? [
+                    chip('live-ip-priv', ip.scene ? '◉ mostrar' : '◌ tapar', !!ip.scene, ip.scene ? C.violet : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, ...(ip.scene ? ['--scene', ip.scene] : ['--privacy'])])),
+                    chip('live-ip-blur', ip.blur ? '◍ sin blur' : '◍ blur', ip.blur, ip.blur ? C.cyan : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, '--blur'])),
+                  ]
+                : []),
+            ],
+          }),
+        ]),
+      )
+      const on = (['cam', 'ip'] as const).filter((k) => live[k].on)
+      const over = measure(out, cols) + 6 - (e.props.scroll?.bodyRows || 0)
+      if (!dock || over <= 0 || !on.length) break
+      for (const k of on) sz[k] = Math.max(3, sz[k] - Math.ceil(over / on.length))
+    }
   }
 
   const lvl = effortLevel()
