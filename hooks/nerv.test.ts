@@ -302,8 +302,8 @@ test('EN VIVO muestra las dos cámaras, el micrófono y sus botones lanzan los o
           exitCode: 0,
           stderr: '',
           stdout: [
-          'cam\ton\t1920\t1080\t30.000\t12.5\t/r/nerv-live/x-cam-1.png\t204',
-          'ip\ton\t1024\t768\t29.97\t8\t/r/nerv-live/x-ip-1.png\t240',
+          'cam\ton\t1920\t1080\t30.000\t12.5',
+          'ip\ton\t1024\t768\t29.97\t8',
           'ipstate\tcamera\tcafe\t1',
           'text\twww.cortexmem.com',
           'mic\tVolume: 0.63 [MUTED]\tHyperX QuadCast 2 S',

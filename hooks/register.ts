@@ -103,7 +103,7 @@ let hw: any = undefined
 let hwBusy = false
 const cpuHist: number[] = []
 const gpuHist: number[] = []
-type LiveCam = { on: boolean; img: string; stamp: number; ph: number; w: number; h: number; fps: number; cpu: number }
+type LiveCam = { on: boolean; w: number; h: number; fps: number; cpu: number }
 let live: {
   cam: LiveCam
   ip: LiveCam & { mode: string; scene: string; blur: boolean; name: string; bat: number; charging: boolean; lens: string; reach: boolean }
@@ -114,8 +114,8 @@ let live: {
   busy: boolean
   n: number
 } = {
-  cam: { on: false, img: '', stamp: 0, ph: 0, w: 0, h: 0, fps: 0, cpu: 0 },
-  ip: { on: false, img: '', stamp: 0, ph: 0, w: 0, h: 0, fps: 0, cpu: 0, mode: '', scene: '', blur: false, name: '', bat: -1, charging: false, lens: '', reach: false },
+  cam: { on: false, w: 0, h: 0, fps: 0, cpu: 0 },
+  ip: { on: false, w: 0, h: 0, fps: 0, cpu: 0, mode: '', scene: '', blur: false, name: '', bat: -1, charging: false, lens: '', reach: false },
   mic: { muted: false, vol: 0, name: '' },
   text: '',
   sharing: false,
@@ -578,34 +578,13 @@ async function refreshHw($: any) {
   }
 }
 
-const LIVE_CAP = `d=$1; rt=\${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-exec 9>"$d/cap.lock"
-flock -n 9 || exit 0
-while [ $(( $(date +%s) - $(stat -c %Y "$d/want" 2>/dev/null || echo 0) )) -lt 5 ]; do
-  for t in camoverlay iphonecam; do
-    s="$rt/$t-mpv.sock"
-    [ -S "$s" ] || continue
-    printf '{"command":["screenshot-to-file","%s","video"]}\\n' "$d/$t.jpg" | socat -t 1 - UNIX-CONNECT:"$s" >/dev/null 2>&1
-    if [ -s "$d/$t.jpg" ]; then
-      magick -define jpeg:size=640x480 "$d/$t.jpg" -thumbnail 320x -define png:compression-level=1 "$d/$t.tmp.png" 2>/dev/null && mv -f "$d/$t.tmp.png" "$d/$t.png"
-      rm -f "$d/$t.jpg"
-    fi
-  done
-  sleep 0.3
-done`
-
-const LIVE_SNAP = `d=$1; deep=$2; rt=\${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-mkdir -p "$d"
-touch "$d/want"
-setsid -f bash -c "$3" nerv-cap "$d" >/dev/null 2>&1 </dev/null
+const LIVE_SNAP = `deep=$1; rt=\${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 mpvpid() { for p in $(pgrep -x mpv); do tr '\\0' '\\n' </proc/$p/cmdline 2>/dev/null | grep -qx -- "--title=$1" && { echo $p; return; }; done; }
 q() { printf '{"command":["get_property","%s"]}\\n' "$2" | socat -t 0.3 - UNIX-CONNECT:"$rt/$1-mpv.sock" 2>/dev/null | jq -r '.data // empty' 2>/dev/null | head -1; }
 snap() {
   p=$(mpvpid "$2")
   if [ -z "$p" ]; then printf '%s\\toff\\n' "$1"; return; fi
-  o="$d/$2.png"; ph=
-  if [ -s "$o" ]; then ph=$(identify -format %h "$o" 2>/dev/null); else o=; fi
-  printf '%s\\ton\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$(q "$2" width)" "$(q "$2" height)" "$(q "$2" estimated-vf-fps)" "$(ps -o %cpu= -p "$p" | tr -d ' ')" "$o" "$ph"
+  printf '%s\\ton\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$(q "$2" width)" "$(q "$2" height)" "$(q "$2" estimated-vf-fps)" "$(ps -o %cpu= -p "$p" | tr -d ' ')"
 }
 snap cam camoverlay
 snap ip iphonecam
@@ -621,8 +600,6 @@ if [ "$deep" = 1 ]; then
     printf 'ipapi\\t%s\\t%s\\t%s\\n' "$(echo "$name" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/phone/battery_info" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/camera/info" | tr '\\n\\t' '  ')"
   else printf 'ipapi\\t\\n'; fi
 fi`
-
-const liveDir = () => `${runDir}/nerv-live`
 
 const liveJson = (s: string): any => {
   try {
@@ -656,7 +633,7 @@ async function refreshLive($: any) {
   live.busy = true
   try {
     const n = ++live.n
-    const r = await $.process.run(['bash', '-c', LIVE_SNAP, 'nerv-live', liveDir(), n % 10 === 1 ? '1' : '0', LIVE_CAP], { timeoutMs: 12000 }).catch(() => undefined)
+    const r = await $.process.run(['bash', '-c', LIVE_SNAP, 'nerv-live', n % 10 === 1 ? '1' : '0'], { timeoutMs: 12000 }).catch(() => undefined)
     for (const line of String(r?.stdout || '').split('\n')) {
       const f = line.split('\t')
       if (f[0] === 'cam' || f[0] === 'ip') {
@@ -667,11 +644,7 @@ async function refreshLive($: any) {
           c.h = Number(f[3]) || 0
           c.fps = Math.round(Number(f[4]) || 0)
           c.cpu = Math.round(Number(f[5]) || 0)
-          if (f[6]) {
-            c.img = f[6]
-            c.ph = (Number(f[7]) || 192) / 320
-          }
-        } else c.img = ''
+        }
       } else if (f[0] === 'ipstate') {
         live.ip.mode = f[1] || ''
         live.ip.scene = f[2] || ''
@@ -696,19 +669,6 @@ async function refreshLive($: any) {
     live.busy = false
   }
   $.ui.invalidate('ui.render')
-}
-
-async function liveFrames($: any) {
-  let moved = false
-  for (const c of [live.cam, live.ip]) {
-    if (!c.on || !c.img) continue
-    const m = (await $.fs.stat(c.img).catch(() => undefined))?.mtimeMs ?? 0
-    if (m && m !== c.stamp) {
-      c.stamp = m
-      moved = true
-    }
-  }
-  if (moved) $.ui.invalidate('ui.render')
 }
 
 async function liveRun($: any, args: string[]) {
@@ -1661,12 +1621,6 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'live') {
-    const shot = (c: LiveCam, key: string) => {
-      if (!Image || !c.img || w < 20) return []
-      const cols = w - 2
-      const rows = Math.max(4, Math.min(14, Math.round((cols * (c.ph || 0.6)) / 2.1)))
-      return [Image({ key: `live-img-${key}-${c.stamp}`, source: { file: c.img, format: 'png' }, columns: cols, rows, alt: '▣' })]
-    }
     const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
     const rec = !!(live.cam.on || live.ip.on)
     out.push(
@@ -1683,7 +1637,6 @@ function draw($: any, e: any) {
     )
     out.push(
       card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
-        ...shot(live.cam, 'cam'),
         ...(live.cam.on ? [stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
         Box({
           key: 'live-cam-ctl',
@@ -1710,7 +1663,6 @@ function draw($: any, e: any) {
     const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
     out.push(
       card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
-        ...shot(ip, 'ip'),
         ...(ip.on ? [stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
         ip.reach
           ? kv([span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)], [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)])
@@ -2603,7 +2555,6 @@ export function register(on: any) {
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'live' && frame % 12 === 0) void refreshLive($)
-      if (tab === 'live' && frame % 2 === 1) void liveFrames($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
