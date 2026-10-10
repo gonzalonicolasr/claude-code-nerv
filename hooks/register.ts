@@ -41,7 +41,7 @@ const TABS = [
   { id: 'magi', label: 'MAGI', hotkey: '1' },
   { id: 'git', label: 'GIT', hotkey: '2' },
   { id: 'hw', label: 'HW', hotkey: '3' },
-  { id: 'board', label: 'TABLERO', hotkey: '4' },
+  { id: 'live', label: 'EN VIVO', hotkey: '4' },
   { id: 'forge', label: 'FORGE', hotkey: '5' },
   { id: 'nodd', label: 'NODD', hotkey: '6' },
   { id: 'cortex', label: 'CORTEX', hotkey: '7' },
@@ -103,12 +103,28 @@ let hw: any = undefined
 let hwBusy = false
 const cpuHist: number[] = []
 const gpuHist: number[] = []
-type BoardTask = { id: number; title: string; status: string; assignee: string | null; priority: string; area: string | null; position: number; updatedAt: number }
-let board: { tasks: BoardTask[]; err: string; busy: boolean } = { tasks: [], err: '', busy: false }
-let boardCfg: { url: string; user: string; password: string } | undefined
-let boardCookie = ''
-let boardDraft = ''
-let boardAll = false
+type LiveCam = { on: boolean; img: string; ph: number; w: number; h: number; fps: number; cpu: number }
+let live: {
+  cam: LiveCam
+  ip: LiveCam & { mode: string; scene: string; blur: boolean; name: string; bat: number; charging: boolean; lens: string; reach: boolean }
+  mic: { muted: boolean; vol: number; name: string }
+  text: string
+  sharing: boolean
+  discord: boolean
+  busy: boolean
+  n: number
+} = {
+  cam: { on: false, img: '', ph: 0, w: 0, h: 0, fps: 0, cpu: 0 },
+  ip: { on: false, img: '', ph: 0, w: 0, h: 0, fps: 0, cpu: 0, mode: '', scene: '', blur: false, name: '', bat: -1, charging: false, lens: '', reach: false },
+  mic: { muted: false, vol: 0, name: '' },
+  text: '',
+  sharing: false,
+  discord: false,
+  busy: false,
+  n: 0,
+}
+let liveText: string | undefined
+let liveTextKey = 0
 let bodyOffset = 0
 let bodyMax = 0
 let bodyTab = ''
@@ -562,54 +578,114 @@ async function refreshHw($: any) {
   }
 }
 
-async function boardFetch($: any, path: string, init: { method?: string; body?: string } = {}) {
-  if (!boardCfg) {
-    try {
-      boardCfg = JSON.parse((await $.fs.read(`${home}/.config/nerv/tablero.json`)) || '')
-    } catch {
-      throw new Error('falta ~/.config/nerv/tablero.json')
-    }
-  }
-  const cfg = boardCfg!
-  const go = () => $.http.fetch(cfg.url + path, { ...init, headers: { 'Content-Type': 'application/json', ...(boardCookie ? { Cookie: boardCookie } : {}) } })
-  let r: any = boardCookie ? await go() : { status: 401 }
-  if (r.status === 401) {
-    const l = await $.http.fetch(cfg.url + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: cfg.user, password: cfg.password }) })
-    const sc = l.headers?.['set-cookie']
-    boardCookie = String(Array.isArray(sc) ? sc[0] : sc || '').split(';')[0]
-    if (!l.ok || !boardCookie) throw new Error(`no pude entrar al tablero (${l.status})`)
-    r = await go()
-  }
-  if (!r.ok) throw new Error(`el tablero respondió ${r.status}`)
-  return r.text ? JSON.parse(r.text) : null
+const LIVE_SNAP = `d=$1; sid=$2; n=$3; deep=$4; rt=\${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+mkdir -p "$d"
+find "$d" -name "$sid-*" -mmin +1 -delete 2>/dev/null
+mpvpid() { for p in $(pgrep -x mpv); do tr '\\0' '\\n' </proc/$p/cmdline 2>/dev/null | grep -qx -- "--title=$1" && { echo $p; return; }; done; }
+q() { printf '{"command":["get_property","%s"]}\\n' "$2" | socat -t 0.3 - UNIX-CONNECT:"$rt/$1-mpv.sock" 2>/dev/null | jq -r '.data // empty' 2>/dev/null | head -1; }
+snap() {
+  p=$(mpvpid "$2")
+  if [ -z "$p" ]; then printf '%s\\toff\\n' "$1"; return; fi
+  j="$d/$sid-$1.jpg"; o="$d/$sid-$1-$n.png"
+  printf '{"command":["screenshot-to-file","%s","video"]}\\n' "$j" | socat -t 1 - UNIX-CONNECT:"$rt/$2-mpv.sock" >/dev/null 2>&1
+  if [ -s "$j" ] && magick "$j" -resize 320x "$o" 2>/dev/null; then rm -f "$j"; ph=$(identify -format %h "$o" 2>/dev/null); else o=; ph=; fi
+  printf '%s\\ton\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$(q "$2" width)" "$(q "$2" height)" "$(q "$2" estimated-vf-fps)" "$(ps -o %cpu= -p "$p" | tr -d ' ')" "$o" "$ph"
 }
+snap cam camoverlay
+snap ip iphonecam
+st=\${XDG_STATE_HOME:-$HOME/.local/state}
+printf 'ipstate\\t%s\\t%s\\t%s\\n' "$(cat "$rt/iphonecam-mode" 2>/dev/null)" "$(cat "$st/iphonecam/scene" 2>/dev/null)" "$(cat "$rt/iphonecam-blur" 2>/dev/null)"
+printf 'text\\t%s\\n' "$(tr '\\n\\t' '  ' < "$st/camoverlay-text.txt" 2>/dev/null)"
+printf 'mic\\t%s\\t%s\\n' "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null)" "$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node.nick = "\\(.*\\)"/\\1/p' | head -1)"
+printf 'discord\\t%s\\n' "$(pgrep -ix discord >/dev/null && echo 1)"
+if [ "$deep" = 1 ]; then
+  printf 'sharing\\t%s\\n' "$(pw-cli ls Node 2>/dev/null | grep -c 'node.name = "xdph')"
+  ip=$(jq -r '.. | .cur_dev_ip? // empty' "$HOME/.config/droidcam-obs-client/basic/scenes/Untitled.json" 2>/dev/null | head -1)
+  if [ -n "$ip" ] && name=$(curl -fs -m 1.5 "http://$ip:4747/v1/phone/name"); then
+    printf 'ipapi\\t%s\\t%s\\t%s\\n' "$(echo "$name" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/phone/battery_info" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/camera/info" | tr '\\n\\t' '  ')"
+  else printf 'ipapi\\t\\n'; fi
+fi`
 
-async function refreshBoard($: any) {
-  if (board.busy) return
-  board.busy = true
+const liveDir = () => `${runDir}/nerv-live`
+
+const liveJson = (s: string): any => {
   try {
-    const st = await boardFetch($, '/api/state')
-    board.tasks = (st?.tasks || []) as BoardTask[]
-    board.err = ''
-  } catch (err: any) {
-    board.err = clip(String(err?.message || err), 60)
-  } finally {
-    board.busy = false
-    $.ui.invalidate('ui.render')
+    return JSON.parse(s)
+  } catch {
+    return undefined
   }
 }
 
-async function boardMove($: any, id: number, status: string) {
-  const t = board.tasks.find((x) => x.id === id)
-  if (t) t.status = status
-  $.ui.invalidate('ui.render')
-  await boardFetch($, `/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status, beforeId: null }) }).catch((err: any) => (board.err = clip(String(err?.message || err), 60)))
-  await refreshBoard($)
+export const liveBattery = (raw: string): { bat: number; charging: boolean } => {
+  const j = liveJson(raw)
+  const lvl = Number(j?.level ?? j?.battery ?? j?.percent ?? (typeof j === 'number' ? j : NaN))
+  return { bat: Number.isFinite(lvl) ? Math.round(lvl <= 1 ? lvl * 100 : lvl) : -1, charging: !!(j?.charging ?? j?.isCharging ?? j?.plugged) }
 }
 
-async function boardAdd($: any, title: string) {
-  await boardFetch($, '/api/tasks', { method: 'POST', body: JSON.stringify({ title, assignee: boardCfg?.user || null, status: 'pendiente', priority: 'media' }) }).catch((err: any) => (board.err = clip(String(err?.message || err), 60)))
-  await refreshBoard($)
+export const liveLens = (raw: string): string => {
+  const j = liveJson(raw)
+  if (!j) return ''
+  const list = j.cameras || j.lenses || j.list
+  const act = j.active ?? j.current ?? j.camera
+  if (Array.isArray(list) && act != null) {
+    const x = list[Number(act)] ?? list.find((c: any) => c?.id === act || c?.index === act)
+    const nm = typeof x === 'string' ? x : x?.name || x?.label || x?.type
+    if (nm) return String(nm)
+  }
+  return typeof act === 'string' ? act : act != null ? `lente ${act}` : ''
+}
+
+async function refreshLive($: any) {
+  if (live.busy || !home) return
+  live.busy = true
+  try {
+    const n = ++live.n
+    const r = await $.process.run(['bash', '-c', LIVE_SNAP, 'nerv-live', liveDir(), sessionId || 'x', String(n % 2), n % 10 === 1 ? '1' : '0'], { timeoutMs: 12000 }).catch(() => undefined)
+    for (const line of String(r?.stdout || '').split('\n')) {
+      const f = line.split('\t')
+      if (f[0] === 'cam' || f[0] === 'ip') {
+        const c = live[f[0] as 'cam' | 'ip']
+        c.on = f[1] === 'on'
+        if (c.on) {
+          c.w = Number(f[2]) || 0
+          c.h = Number(f[3]) || 0
+          c.fps = Math.round(Number(f[4]) || 0)
+          c.cpu = Math.round(Number(f[5]) || 0)
+          if (f[6]) {
+            c.img = f[6]
+            c.ph = (Number(f[7]) || 192) / 320
+          }
+        } else c.img = ''
+      } else if (f[0] === 'ipstate') {
+        live.ip.mode = f[1] || ''
+        live.ip.scene = f[2] || ''
+        live.ip.blur = f[3] === '1'
+      } else if (f[0] === 'text') live.text = f[1] || ''
+      else if (f[0] === 'mic') {
+        live.mic.muted = /MUTED/.test(f[1] || '')
+        live.mic.vol = Math.round((Number(/[\d.]+/.exec(f[1] || '')?.[0]) || 0) * 100)
+        live.mic.name = f[2] || ''
+      } else if (f[0] === 'discord') live.discord = f[1] === '1'
+      else if (f[0] === 'sharing') live.sharing = Number(f[1]) > 0
+      else if (f[0] === 'ipapi') {
+        live.ip.reach = !!f[1]
+        if (f[1]) {
+          live.ip.name = clip(liveJson(f[1])?.name || f[1].replace(/^"|"$/g, ''), 24)
+          Object.assign(live.ip, liveBattery(f[2] || ''))
+          live.ip.lens = liveLens(f[3] || '')
+        }
+      }
+    }
+  } finally {
+    live.busy = false
+  }
+  $.ui.invalidate('ui.render')
+}
+
+async function liveRun($: any, args: string[]) {
+  await $.process.run(['setsid', '-f', ...args], { timeoutMs: 5000 }).catch(() => undefined)
+  await $.clock.sleep(1500).catch(() => undefined)
+  await refreshLive($)
 }
 
 async function herdrJson($: any, args: string[]) {
@@ -985,7 +1061,7 @@ function draw($: any, e: any) {
             tab = x.id
             $.store.set('tab', tab).catch(() => undefined)
             if (x.id === 'hw') refreshHw($)
-            if (x.id === 'board') refreshBoard($)
+            if (x.id === 'live') void refreshLive($)
             if (x.id === 'forge') refreshForge($)
             if (x.id === 'nodd') refreshNodd($)
             if (x.id === 'cortex') refreshCortex($)
@@ -1555,66 +1631,77 @@ function draw($: any, e: any) {
     }
   }
 
-  if (tab === 'board') {
-    const me = boardCfg?.user || 'gonzalo'
-    const prio: Record<string, number> = { alta: 0, media: 1, baja: 2 }
-    const dot = (p: string) => span('● ', p === 'alta' ? C.red : p === 'media' ? C.amber : C.dim)
-    const who = (a: string | null) => span(a ? a[0].toUpperCase() + ' ' : '· ', a === me ? C.lime : C.cyan)
-    const mine = (x: BoardTask) => boardAll || x.assignee === me
-    const doing = board.tasks.filter((x) => x.status === 'en_curso' && mine(x)).sort((a, b) => a.position - b.position)
-    const todo = board.tasks.filter((x) => x.status === 'pendiente' && mine(x)).sort((a, b) => (prio[a.priority] ?? 9) - (prio[b.priority] ?? 9) || a.position - b.position)
-    const weekAgo = now() - 7 * 86400000
-    const done = board.tasks.filter((x) => x.status === 'hecho' && mine(x) && x.updatedAt >= weekAgo).sort((a, b) => b.updatedAt - a.updatedAt)
+  if (tab === 'live') {
+    const shot = (c: LiveCam, key: string) => {
+      if (!Image || !c.img || w < 20) return []
+      const cols = w - 2
+      const rows = Math.max(4, Math.min(14, Math.round((cols * (c.ph || 0.6)) / 2.1)))
+      return [Image({ key: `live-img-${key}-${live.n}`, source: { file: c.img, format: 'png' }, columns: cols, rows, alt: '▣' })]
+    }
+    const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
+    const rec = !!(live.cam.on || live.ip.on)
     out.push(
-      card('board-head', '▦ TABLERO · ATENTY', C.purple, [
-        kv([span(`▶ ${doing.length} en curso  `, doing.length ? C.lime : C.dim), span(`□ ${todo.length} pendientes`, C.text)], [span(`✓ ${done.length}`, done.length ? C.lime : C.dim)]),
+      card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
+        kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
+        kv([span('◇ Discord ', C.text)], [span(live.discord ? 'abierto · sin dato de espectadores' : 'cerrado', live.discord ? C.muted : C.dim)]),
         Box({
-          key: 'board-filter',
+          key: 'live-ctl',
           flexDirection: 'row',
-          children: [chip('board-mine', 'mías', !boardAll, C.tabBg, () => ((boardAll = false), $.ui.invalidate('ui.render'))), chip('board-all', 'todas', boardAll, C.tabBg, () => ((boardAll = true), $.ui.invalidate('ui.render')))],
+          flexWrap: 'wrap',
+          children: [chip('live-mic', live.mic.muted ? '🎙 activar' : '🎙 silenciar', live.mic.muted, live.mic.muted ? C.red : C.tabBg, () => void liveRun($, ['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']))],
         }),
-        Input({
-          key: 'board-new',
-          placeholder: '+ nueva tarea para vos…',
-          value: boardDraft,
-          submitLabel: 'agregar',
-          onInput: (v: string) => (boardDraft = v),
-          onSubmit: (v: string) => {
-            const title = v.trim()
-            if (!title) return
-            boardDraft = ''
-            void boardAdd($, title)
-          },
-        }),
-        ...(board.err ? [t([span('✖ ' + board.err, C.red)])] : board.busy && !board.tasks.length ? [t([span('leyendo el tablero…', C.muted)])] : []),
       ]),
     )
-    const taskRow = (x: BoardTask, actions: any[]) =>
-      Box({
-        key: 'bt-' + x.id,
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        children: [t([dot(x.priority), who(x.assignee), span(clip(x.title, Math.max(8, w - 4 - actions.length * 4)), C.text)]), Box({ key: 'bt-act-' + x.id, flexDirection: 'row', children: actions })],
-      })
-    if (doing.length)
-      out.push(
-        card(
-          'board-doing',
-          '▶ EN CURSO',
-          C.lime,
-          doing.map((x) => taskRow(x, [chip('bd-ok-' + x.id, '✓', true, C.tabBg, () => void boardMove($, x.id, 'hecho')), chip('bd-back-' + x.id, '↩', false, C.tabBg, () => void boardMove($, x.id, 'pendiente'))])),
-        ),
-      )
     out.push(
-      scard(
-        'board-todo',
-        `□ PENDIENTES · ${todo.length}`,
-        C.violet,
-        todo.length ? todo.map((x) => taskRow(x, [chip('bd-go-' + x.id, '▶', false, C.tabBg, () => void boardMove($, x.id, 'en_curso'))])) : [t([span('nada pendiente', C.muted)])],
-        12,
-      ),
+      card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
+        ...shot(live.cam, 'cam'),
+        ...(live.cam.on ? [stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
+        Box({
+          key: 'live-cam-ctl',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
+        }),
+        Input({
+          key: 'live-text-' + liveTextKey,
+          placeholder: '▭ texto de la banda',
+          value: liveText ?? live.text,
+          submitLabel: 'poner',
+          onInput: (v: string) => (liveText = v),
+          onSubmit: (v: string) => {
+            liveText = undefined
+            liveTextKey++
+            live.text = v.trim()
+            void liveRun($, [`${home}/.local/bin/camoverlay`, '--text', v.trim()])
+          },
+        }),
+      ]),
     )
-    if (done.length) out.push(card('board-done', `✓ HECHAS · últimos 7 días`, C.dim, done.slice(0, 4).map((x) => t([span('✓ ', C.lime), span(clip(x.title, w - 4), C.dim)]))))
+    const ip = live.ip
+    const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
+    out.push(
+      card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
+        ...shot(ip, 'ip'),
+        ...(ip.on ? [stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
+        ip.reach
+          ? kv([span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)], [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)])
+          : t([span('DroidCam no responde en el celu', C.dim)]),
+        Box({
+          key: 'live-ip-ctl',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [
+            chip('live-ip-tg', ip.on ? '■ cerrar' : '▶ abrir', ip.on, ip.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/iphonecam`])),
+            ...(ip.on
+              ? [
+                  chip('live-ip-priv', ip.scene ? '◉ mostrar' : '◌ tapar', !!ip.scene, ip.scene ? C.violet : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, ...(ip.scene ? ['--scene', ip.scene] : ['--privacy'])])),
+                  chip('live-ip-blur', ip.blur ? '◍ sin blur' : '◍ blur', ip.blur, ip.blur ? C.cyan : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, '--blur'])),
+                ]
+              : []),
+          ],
+        }),
+      ]),
+    )
   }
 
   const lvl = effortLevel()
@@ -2463,7 +2550,7 @@ export function register(on: any) {
     await loadEmails($)
     quiet = (await $.store.get('quiet').catch(() => false)) === true
     tab = ((await $.store.get('tab').catch(() => undefined)) as string) || 'magi'
-    if (tab === 'crew') tab = 'board'
+    if (tab === 'crew' || tab === 'board') tab = 'live'
     for (const k of ((await $.store.get('folded').catch(() => [])) as string[]) || []) folded.add(k)
     ytRecent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
@@ -2472,13 +2559,13 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | tablero | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
     refreshPRs($)
     if (tab === 'hw') refreshHw($)
-    if (tab === 'board') refreshBoard($)
+    if (tab === 'live') void refreshLive($)
     if (tab === 'forge') refreshForge($)
     if (tab === 'cortex') refreshCortex($)
     $.clock.every(125, () => {
@@ -2486,7 +2573,7 @@ export function register(on: any) {
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen) return
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
-      if (tab === 'board' && frame % 240 === 0) refreshBoard($)
+      if (tab === 'live' && frame % 12 === 0) void refreshLive($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
@@ -2560,11 +2647,11 @@ export function register(on: any) {
         void ytSearch($, q)
       } else await ytPoll($)
     }
-    if (arg === 'hw' || arg === 'equipo' || arg === 'tablero' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
-      tab = arg === 'hw' ? 'hw' : arg === 'equipo' || arg === 'tablero' ? 'board' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
+    if (arg === 'hw' || arg === 'vivo' || arg === 'live' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
+      tab = arg === 'hw' ? 'hw' : arg === 'vivo' || arg === 'live' ? 'live' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
-      if (tab === 'board') await refreshBoard($)
+      if (tab === 'live') await refreshLive($)
       if (tab === 'forge') await refreshForge($)
       if (tab === 'nodd') await refreshNodd($)
       if (tab === 'cortex') await refreshCortex($)

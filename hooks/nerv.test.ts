@@ -1,4 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
+import { liveBattery, liveLens } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -285,4 +286,55 @@ test('las tools se dibujan con los glifos del tema y el grupo resume en castella
   expect(JSON.stringify(await bad.drawn())).toContain('✖ ')
   const group: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolGroup', requestId: 'g', props: { isActive: false, isExpanded: false, calls: [{ tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }] } })
   expect(JSON.stringify(await group.drawn())).toContain('2 lecturas · 1 comando')
+})
+
+test('EN VIVO muestra las dos cámaras, el micrófono y sus botones lanzan los overlays', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  const launched: string[][] = []
+  const clock = mock.clock(on)
+  on('process.run', async (_$: any, e: any) => {
+    const argv: string[] = e.argv
+    if (argv[0] === 'setsid') launched.push(argv.slice(2))
+    if (argv[0] === 'bash' && argv.includes('nerv-live'))
+      return {
+        value: {
+          exitCode: 0,
+          stderr: '',
+          stdout: [
+          'cam\ton\t1920\t1080\t30.000\t12.5\t/r/nerv-live/x-cam-1.png\t204',
+          'ip\ton\t1024\t768\t29.97\t8\t/r/nerv-live/x-ip-1.png\t240',
+          'ipstate\tcamera\tcafe\t1',
+          'text\twww.cortexmem.com',
+          'mic\tVolume: 0.63 [MUTED]\tHyperX QuadCast 2 S',
+          'discord\t1',
+          'sharing\t1',
+          'ipapi\t"iPhone de Gon"\t{"level":87,"charging":true}\t{"active":1,"cameras":["Wide","Ultrawide"]}',
+          ].join('\n'),
+        },
+      }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'vivo' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  const drawn = JSON.stringify(await m.drawn())
+  for (const x of ['EN VIVO', 'AL AIRE', 'STREAMCAM · en vivo', '1920×1080', '30 fps', 'SILENCIADO', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%']) expect(drawn).toContain(x)
+  await m.press({ key: 'live-cam-tg' })
+  await m.press({ key: 'live-ip-priv' })
+  await m.press({ key: 'live-mic' })
+  await clock.advance(2000)
+  expect(launched).toContainEqual(['/h/.local/bin/camoverlay'])
+  expect(launched).toContainEqual(['/h/.local/bin/iphonecam', '--scene', 'cafe'])
+  expect(launched).toContainEqual(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle'])
+})
+
+test('EN VIVO entiende la batería y el lente que manda DroidCam en varias formas', () => {
+  expect(liveBattery('{"level":87,"charging":true}')).toEqual({ bat: 87, charging: true })
+  expect(liveBattery('{"battery":0.42}')).toEqual({ bat: 42, charging: false })
+  expect(liveBattery('basura')).toEqual({ bat: -1, charging: false })
+  expect(liveLens('{"active":1,"cameras":[{"name":"Wide"},{"name":"Ultrawide"}]}')).toBe('Ultrawide')
+  expect(liveLens('{"active":3}')).toBe('lente 3')
+  expect(liveLens('')).toBe('')
 })

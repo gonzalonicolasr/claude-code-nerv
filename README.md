@@ -36,7 +36,7 @@ abiertas y lo que pliegues queda guardado).
     pongas en `~/.config/nerv/projects.json` como `{ "roots": ["~/projects", "~/otra"] }`.
 - **3 · HW:** GPU, VRAM, CPU y RAM con un gráfico animado, periféricos, monitores y máquinas
   secundarias.
-- **4 · EQUIPO:** tus sesiones de [herdr](https://herdr.dev), con las que te necesitan primero.
+- **4 · EN VIVO:** la StreamCam y el iPhone en miniatura, el micrófono y los botones para abrir los overlays, cambiar la banda y tapar la cámara.
 - **5 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
   botón para iniciar una corrida.
 
@@ -52,7 +52,7 @@ pasa, sale un confeti. En los turnos de más de 3 minutos llega una notificació
 - Una terminal con colores de 24 bits. Ghostty, kitty y WezTerm andan bien.
 - Opcionales: cada sección se apaga sola si falta lo suyo.
   - `gh` para las PRs y el CI.
-  - [herdr](https://herdr.dev) para EQUIPO.
+  - `camoverlay` e `iphonecam` (mpv con socket IPC), `socat`, ImageMagick y `wpctl` para EN VIVO.
   - `~/.local/bin/jcode-rail --json` para HARDWARE.
   - forge para la pestaña FORGE.
 
@@ -77,7 +77,7 @@ Si tenés varios mods, separalos con `:`.
 |---|---|
 | `/nerv` o `/nerv on` | Abre la barra |
 | `/nerv quiet` | La esconde y apaga las animaciones (para grabar o compartir pantalla) |
-| `/nerv magi` · `git` · `hw` · `equipo` · `forge` | Va a esa pestaña |
+| `/nerv magi` · `git` · `hw` · `vivo` · `forge` | Va a esa pestaña |
 | `/nerv tema eva01\|eva00\|eva02\|eva08\|mark06` | Cambia los colores de todo el panel |
 | `/nerv prs` | Refresca las PRs |
 | `/nerv debug` | Muestra el estado interno |
