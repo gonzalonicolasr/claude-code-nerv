@@ -167,6 +167,10 @@ const YT_FILL = [
   'done',
 ].join('\n')
 const ytState = () => `${runDir}/nerv-yt.json`
+const YT_KILL = 'for p in $(pgrep -x mpv) $(pgrep -x bash); do tr "\\0" "\\n" </proc/$p/cmdline 2>/dev/null | grep -qx -e "--input-ipc-server=$1" -e nerv-yt-fill && [ "$p" != $$ ] && kill "$p"; done; true'
+let ytStarting = 0
+const ytStartFile = () => `${runDir}/nerv-yt.starting`
+const ytPend = new Set<string>()
 const ytMapPath = () => `${runDir}/nerv-yt.map`
 let ytMap: Record<string, string> = {}
 let ytItems: Record<string, YtItem> = {}
@@ -1384,7 +1388,7 @@ function draw($: any, e: any) {
         }),
       )
       if (ytNote) nowRows.push(t([span('◌ ' + ytNote, C.amber)]))
-      else if (n.idx + 1 < yt.queue.length) nowRows.push(t([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 4), C.dim)]))
+      else if (n.idx + 1 < yt.queue.length) nowRows.push(kvBtn([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 16), C.dim)], chip('yt-clear', '✕ limpiar cola', false, C.tabBg, () => void ytCtl($, ['playlist-clear']))))
     } else nowRows.push(t([span('nada sonando · buscá algo abajo', C.muted)]))
     out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n ? (n.pause ? C.amber : C.lime) : C.purple, nowRows))
     if (n && yt.queue.length > 1)
@@ -2030,42 +2034,69 @@ async function ytRemember($: any, list: YtItem[], url = '', id = '') {
 
 async function ytPlay($: any, i: number) {
   if (yt.now) return ytInsert($, yt.results[i], true)
-  const list = yt.results.slice(i, i + 25)
+  return ytStart($, yt.results.slice(i, i + 25))
+}
+
+async function ytStart($: any, list: YtItem[]) {
   if (!list.length) return
+  ytStarting = Date.now()
+  await $.fs.write(ytStartFile(), String(ytStarting)).catch(() => undefined)
   yt.queue = list
   yt.now = { idx: 0, title: list[0].title }
   $.ui.invalidate('ui.render')
-  await ytSend($, [['quit']]).catch(() => undefined)
-  await $.process.run(['rm', '-f', ytMapPath()], { timeoutMs: 5000 }).catch(() => undefined)
-  const direct = await ytResolve($, list[0].id)
-  await ytRemember($, list, direct, list[0].id)
-  await $.process
-    .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${direct ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, direct || `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
-    .catch(() => undefined)
-  if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ytMapPath(), ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
+  try {
+    await ytSend($, [['quit']]).catch(() => undefined)
+    await $.process.run(['bash', '-c', YT_KILL, 'nerv-yt-kill', ytSock()], { timeoutMs: 5000 }).catch(() => undefined)
+    await $.process.run(['rm', '-f', ytMapPath()], { timeoutMs: 5000 }).catch(() => undefined)
+    const direct = await ytResolve($, list[0].id)
+    await ytRemember($, list, direct, list[0].id)
+    await $.process
+      .run(['setsid', '-f', 'mpv', '--no-video', '--no-terminal', '--volume=100', `--ytdl=${direct ? 'no' : 'yes'}`, `--input-ipc-server=${ytSock()}`, '--ytdl-format=bestaudio/best', `--ytdl-raw-options=cookies-from-browser=${YT_COOKIES}`, direct || `https://youtu.be/${list[0].id}`], { timeoutMs: 5000 })
+      .catch(() => undefined)
+    if (list.length > 1) await $.process.run(['setsid', '-f', 'bash', '-c', YT_FILL, 'nerv-yt-fill', ytSock(), YT_COOKIES, ytMapPath(), ...list.slice(1).map((x) => x.id)], { timeoutMs: 5000 }).catch(() => undefined)
+    await ytWaitSock($)
+  } finally {
+    ytStarting = 0
+    await $.process.run(['rm', '-f', ytStartFile()], { timeoutMs: 5000 }).catch(() => undefined)
+  }
   $.ui.invalidate('ui.render')
 }
 
-async function ytInsert($: any, item: YtItem | undefined, playNow: boolean) {
-  if (!item) return
-  if (!yt.now) {
-    const i = yt.results.findIndex((x) => x.id === item.id)
-    if (playNow && i >= 0) return ytPlay($, i)
-    yt.results = [item, ...yt.results.filter((x) => x.id !== item.id)]
-    return ytPlay($, 0)
+async function ytWaitSock($: any) {
+  for (let k = 0; k < 40; k++) {
+    if (await $.fs.stat(ytSock()).catch(() => undefined)) return true
+    await $.clock.sleep(250).catch(() => undefined)
   }
+  return false
+}
+
+async function ytInsert($: any, item: YtItem | undefined, playNow: boolean) {
+  if (!item || ytPend.has(item.id)) return
+  if (!playNow && yt.now && yt.queue.slice((yt.now.idx || 0) + 1).some((x) => x.id === item.id)) {
+    $.ui.toast(`«${clip(item.title, 28)}» ya está en la cola`)
+    return
+  }
+  const elsewhere = Date.now() - ((await $.fs.stat(ytStartFile()).catch(() => undefined))?.mtimeMs || 0) < 30000
+  ytPend.add(item.id)
+  if (!yt.now && !ytStarting && !elsewhere) return ytStart($, [item]).finally(() => ytPend.delete(item.id))
   ytNote = playNow ? `poniendo «${clip(item.title, 28)}»…` : `sumando «${clip(item.title, 28)}» a la cola…`
   $.ui.invalidate('ui.render')
-  const direct = await ytResolve($, item.id)
-  await ytRemember($, [item], direct, item.id)
-  const load = direct ? ['loadfile', direct, playNow ? 'insert-next' : 'append'] : ['loadfile', `https://youtu.be/${item.id}`, playNow ? 'insert-next' : 'append', -1, 'ytdl=yes']
-  await ytSend($, playNow ? [load, ['playlist-next']] : [load]).catch(() => undefined)
-  ytNote = ''
+  try {
+    const direct = await ytResolve($, item.id)
+    await ytRemember($, [item], direct, item.id)
+    if (ytStarting || elsewhere) await ytWaitSock($)
+    const load = direct ? ['loadfile', direct, playNow ? 'insert-next' : 'append'] : ['loadfile', `https://youtu.be/${item.id}`, playNow ? 'insert-next' : 'append', -1, 'ytdl=yes']
+    await ytSend($, playNow ? [load, ['playlist-next']] : [load]).catch(() => undefined)
+  } finally {
+    ytPend.delete(item.id)
+    ytNote = ytPend.size ? ytNote : ''
+  }
   await ytPoll($)
 }
 
 async function ytPoll($: any) {
   const alive = await $.fs.stat(ytSock()).catch(() => undefined)
+  if (ytStarting && (!alive || Date.now() - ytStarting < 60000)) return
   if (!alive) {
     if (yt.now) ((yt.now = undefined), (yt.queue = []), $.ui.invalidate('ui.render'))
     return

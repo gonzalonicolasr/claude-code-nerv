@@ -338,3 +338,34 @@ test('EN VIVO entiende la batería y el lente que manda DroidCam en varias forma
   expect(liveLens('{"active":3}')).toBe('lente 3')
   expect(liveLens('')).toBe('')
 })
+
+test('YOUTUBE: el + sin nada sonando pone sólo ese tema, una vez, con un solo reproductor', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const launched: string[][] = []
+  const sent: string[] = []
+  on('process.run', async (_$: any, e: any) => {
+    const argv: string[] = e.argv
+    if (argv[0] === 'setsid') launched.push(argv.slice(2))
+    if (argv[0] === 'socat') sent.push(String(e.stdin || ''))
+    if (argv[0] === 'yt-dlp' && argv.includes('--flat-playlist'))
+      return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ entries: ['aaaaaaa', 'bbbbbbb', 'ccccccc'].map((id) => ({ id, title: 'tema ' + id, duration: 60 })) }) } }
+    if (argv[0] === 'yt-dlp' && argv.includes('-g')) return { value: { exitCode: 0, stderr: '', stdout: 'https://direct/' + argv[argv.length - 1].slice(-7) + '\n' } }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'yt algo' })
+  await clock.advance(500)
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.drawn()
+  await m.press({ key: 'yt-add-bbbbbbb' })
+  await m.press({ key: 'yt-add-bbbbbbb' })
+  await clock.advance(20000)
+  const players = launched.filter((a) => a[0] === 'mpv')
+  expect(players.length).toBe(1)
+  expect(players[0]).toContain('https://direct/bbbbbbb')
+  expect(launched.some((a) => a.includes('nerv-yt-fill'))).toBe(false)
+  expect(sent.join('').match(/loadfile/g) || []).toHaveLength(0)
+})
