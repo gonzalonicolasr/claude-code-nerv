@@ -1415,17 +1415,55 @@ function draw($: any, e: any) {
     const recentChips = ytRecent.filter((q) => q !== yt.query).slice(0, 3)
     out.push(
       card('yt-search', '⌕ BUSCAR', C.violet, [
-        Input({
-          key: 'yt-q',
-          placeholder: 'tema, artista, playlist…',
-          value: ytDraft,
-          submitLabel: 'buscar',
-          onInput: (v: string) => (ytDraft = v),
-          onSubmit: (v: string) => {
-            const q = v.trim()
-            if (q) void ytSearch($, q)
-          },
+        Box({
+          key: 'yt-q-row',
+          flexDirection: 'row',
+          alignItems: 'center',
+          children: [
+            Box({
+              key: 'yt-q-field',
+              flexGrow: 1,
+              borderStyle: 'round',
+              borderColor: C.violet,
+              paddingX: 1,
+              flexDirection: 'row',
+              children: [
+                t([span('⌕ ', C.violet, { bold: true })]),
+                Input({
+                  key: 'yt-q',
+                  placeholder: 'clickeá y escribí…',
+                  value: ytDraft,
+                  submitLabel: 'Enter',
+                  onInput: (v: string) => (ytDraft = v),
+                  onSubmit: (v: string) => {
+                    const q = v.trim()
+                    if (q) void ytSearch($, q)
+                  },
+                }),
+              ],
+            }),
+            Box({
+              key: 'box-yt-go',
+              marginLeft: 1,
+              paddingX: 1,
+              backgroundColor: C.violet,
+              children: [
+                Button({
+                  key: 'yt-go',
+                  label: 'BUSCAR',
+                  plain: true,
+                  dimColor: false,
+                  onPress: () => {
+                    const q = ytDraft.trim()
+                    if (q) void ytSearch($, q)
+                    else $.ui.toast('escribí un tema, artista o playlist en el campo')
+                  },
+                }),
+              ],
+            }),
+          ],
         }),
+        t([span('o elegí un atajo:', C.dim)]),
         Box({
           key: 'yt-chips',
           flexDirection: 'row',
