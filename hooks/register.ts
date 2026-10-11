@@ -1712,7 +1712,7 @@ function draw($: any, e: any) {
       const rows: any[] = []
       for (const g of nodd.gates || []) {
         const live = g.enabledInClaudeCode ?? g.enforcedInClaudeCode
-        const state = !live ? ['pendiente', C.amber] : !g.enabled ? ['apagado', C.dim] : on ? ['aplica', C.lime] : ['en espera', C.muted]
+        const state = !live ? ['sólo en pi', C.muted] : !g.enabled ? ['apagado', C.dim] : on ? ['aplica', C.lime] : ['en espera', C.muted]
         rows.push(
           Box({
             key: 'ngrow-' + g.id,

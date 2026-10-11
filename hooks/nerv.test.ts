@@ -245,7 +245,7 @@ test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', as
   await $.command.run({ command: 'nerv', args: 'nodd' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   const drawn = JSON.stringify(await m.drawn())
-  for (const x of ['PRENDIDO', 'chau-txt', 'classify', 'pendiente', '3 calls']) expect(drawn).toContain(x)
+  for (const x of ['PRENDIDO', 'chau-txt', 'classify', 'sólo en pi', '3 calls']) expect(drawn).toContain(x)
   await m.press({ key: 'nodd-off' })
   await m.press({ key: 'ngate-promotion' })
   await m.press({ key: 'ngate-classify' })
