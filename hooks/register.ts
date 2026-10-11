@@ -924,6 +924,7 @@ function draw($: any, e: any) {
   for (const k of Object.keys(cardMax)) delete cardMax[k]
   const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
   const compact = !dock
+  const narrow = compact && cols < 56
   const w = cols - 4
   const t = (children: any[], color = C.text, extra: any = {}) => Text({ wrap: 'truncate', color, children, ...extra })
   const span = (s: string, color: string, extra: any = {}) => Text({ color, children: [s], ...extra })
@@ -1000,11 +1001,10 @@ function draw($: any, e: any) {
       children: [
         t([
           span(' NERV ', ink, { bold: true, backgroundColor: alert && blink() ? C.lime : C.purple }),
-          span(' ネルフ', C.orange, { bold: true }),
-          span(' ⟋ MAGI', C.dim),
+          ...(narrow ? [span(' MAGI ', C.dim), ...[0, 1, 2].map((i) => span(vote(i).on ? '◆' : '◇', vote(i).fg, { bold: vote(i).on }))] : [span(' ネルフ', C.orange, { bold: true }), span(' ⟋ MAGI', C.dim)]),
         ]),
         t([
-          ...(compact ? [0, 1, 2].map((i) => span(` ${'メバカ'[i]}·${vote(i).word} `, vote(i).fg, { bold: vote(i).on })) : []),
+          ...(compact && !narrow ? [0, 1, 2].map((i) => span(` ${'メバカ'[i]}·${vote(i).word} `, vote(i).fg, { bold: vote(i).on })) : []),
           span(compact ? ' ' : ''),
           working
             ? span(` ${SPIN[frame % 4]} OPERANDO `, ink, { bold: true, backgroundColor: C.lime })
@@ -1037,6 +1037,17 @@ function draw($: any, e: any) {
   const oneRow = TABS.reduce((n, x) => n + tabLabel(x).length + 4, 0) <= cols
   const perRow = compact && oneRow ? TABS.length : 3
   const cellW = perRow === TABS.length ? Math.max(...TABS.map((x) => tabLabel(x).length + 3)) + 1 : Math.floor((cols - (perRow - 1)) / perRow)
+  const pickTab = (x: (typeof TABS)[number]) => {
+    tab = x.id
+    $.store.set('tab', tab).catch(() => undefined)
+    if (x.id === 'hw') refreshHw($)
+    if (x.id === 'live') void refreshLive($)
+    if (x.id === 'forge') refreshForge($)
+    if (x.id === 'nodd') refreshNodd($)
+    if (x.id === 'cortex') refreshCortex($)
+    if (x.id === 'yt') ytPoll($)
+    $.ui.invalidate('ui.render')
+  }
   const tabButton = (x: (typeof TABS)[number]) =>
     Box({
       key: 'tabbox-' + x.id,
@@ -1050,21 +1061,26 @@ function draw($: any, e: any) {
           hotkey: x.hotkey,
           plain: true,
           dimColor: tab !== x.id,
-          onPress: () => {
-            tab = x.id
-            $.store.set('tab', tab).catch(() => undefined)
-            if (x.id === 'hw') refreshHw($)
-            if (x.id === 'live') void refreshLive($)
-            if (x.id === 'forge') refreshForge($)
-            if (x.id === 'nodd') refreshNodd($)
-            if (x.id === 'cortex') refreshCortex($)
-            if (x.id === 'yt') ytPoll($)
-            $.ui.invalidate('ui.render')
-          },
+          onPress: () => pickTab(x),
         }),
       ],
     })
-  for (let i = 0; i < TABS.length; i += perRow)
+  if (narrow)
+    out.push(
+      Box({
+        key: 'tabrow-narrow',
+        flexDirection: 'row',
+        columnGap: 1,
+        children: TABS.map((x) =>
+          Box({
+            key: 'tabbox-' + x.id,
+            backgroundColor: tab === x.id ? C.tabBg : undefined,
+            children: [Button({ key: 'tab-' + x.id, label: tab === x.id ? `◆ ${x.label}` : x.hotkey, ...(tab === x.id ? { hotkey: x.hotkey } : {}), plain: true, dimColor: tab !== x.id, onPress: () => pickTab(x) })],
+          }),
+        ),
+      }),
+    )
+  else for (let i = 0; i < TABS.length; i += perRow)
     out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 && !compact ? 1 : 0, children: TABS.slice(i, i + perRow).map(tabButton) }))
   out.push(t([span('─'.repeat(Math.max(0, cols)), C.dim)]))
   const headN = out.length
@@ -1388,7 +1404,7 @@ function draw($: any, e: any) {
         }),
       )
       if (ytNote) nowRows.push(t([span('◌ ' + ytNote, C.amber)]))
-      else if (n.idx + 1 < yt.queue.length) nowRows.push(kvBtn([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 16), C.dim)], chip('yt-clear', '✕ limpiar cola', false, C.tabBg, () => void ytCtl($, ['playlist-clear']))))
+      else if (n.idx + 1 < yt.queue.length) nowRows.push(kvBtn([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 16), C.dim)], chip('yt-clear', narrow ? '✕ limpiar' : '✕ limpiar cola', false, C.tabBg, () => void ytCtl($, ['playlist-clear']))))
     } else nowRows.push(t([span('nada sonando · buscá algo abajo', C.muted)]))
     out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n ? (n.pause ? C.amber : C.lime) : C.purple, nowRows))
     if (n && yt.queue.length > 1)
@@ -1674,7 +1690,7 @@ function draw($: any, e: any) {
       out.push(
         card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
           kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
-          kv([span('◇ Discord ', C.text)], [span(live.discord ? 'abierto · sin dato de espectadores' : 'cerrado', live.discord ? C.muted : C.dim)]),
+          kv([span('◇ Discord ', C.text)], [span(live.discord ? (narrow ? 'abierto' : 'abierto · sin dato de espectadores') : 'cerrado', live.discord ? C.muted : C.dim)]),
           Box({
             key: 'live-ctl',
             flexDirection: 'row',
@@ -1789,18 +1805,10 @@ function draw($: any, e: any) {
     foot.push(Raster({ key: 'effort', columns: cols, rows: 2, cells: effortCells(cols) }))
     foot.push(pickRow(effortGeom(cols).step, 3))
   }
-  if (compact)
-    foot.splice(
-      1,
-      foot.length,
-      Box({
-        flexDirection: 'row',
-        children: [
-          t([span('◆ ', hue), span('EFFORT ', C.muted, { bold: true }), lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hue }) : span('–', C.dim), span(effortPick ? ' fijado ' : ' ', C.muted)]),
-          pickRow(6, 1),
-        ],
-      }),
-    )
+  if (compact) {
+    const label = t([span('◆ ', hue), span('EFFORT ', C.muted, { bold: true }), lvl ? span(` ${effortName()} `, ink, { bold: true, backgroundColor: hue }) : span('–', C.dim), span(effortPick ? ' fijado ' : ' ', C.muted)])
+    foot.splice(1, foot.length, ...(narrow ? [Box({ flexDirection: 'row', children: [t([span('◆ ', hue)]), pickRow(Math.floor((cols - 3) / 5), 0)] })] : [Box({ flexDirection: 'row', children: [label, pickRow(6, 1)] })]))
+  }
   const rows = e.props.scroll?.bodyRows || 0
   const footBox = Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot })
   if (!rows || e.props.placement !== 'dock') {
