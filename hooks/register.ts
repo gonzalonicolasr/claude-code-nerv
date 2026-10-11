@@ -182,6 +182,35 @@ let cortexKey = ''
 let cortexBusy = false
 const CORTEX_URL = 'https://cortexmem.com/api/cortex/mcp'
 const CORTEX_TYPES: Record<string, string> = { bug_fix: 'bugs', discovery: 'hallazgos', config: 'config', architecture: 'arquitectura', decision: 'decisiones', lesson: 'lecciones', pattern: 'patrones', preference: 'preferencias', session_summary: 'sesiones', context: 'contexto' }
+export type CxEvent = { ts: string; kind: string; ws: string; tool: string; ids: number[]; titles: string[]; types: string[]; projects: string[]; workspaces: string[]; session: string; project: string; prompt: string }
+export type CxHit = { id: number; type: string; title: string; project: string; workspace: string }
+const CX_VERBS: Record<string, string> = {
+  memoria_search: 'buscó',
+  memoria_recall: 'recordó',
+  memoria_get: 'abrió',
+  memoria_hint: 'pidió pistas',
+  memoria_context: 'cargó el contexto',
+  memoria_recent: 'miró lo reciente',
+  memoria_timeline: 'miró la línea de tiempo',
+  memoria_projects: 'listó proyectos',
+  memoria_stats: 'miró estadísticas',
+  memoria_session_find: 'buscó sesiones',
+  memoria_pending: 'miró pendientes',
+  memoria_pending_done: 'cerró un pendiente',
+  memoria_save: 'guardó',
+  memoria_update: 'actualizó',
+  memoria_session_start: 'abrió sesión',
+  memoria_session_end: 'cerró la sesión',
+  memoria_feedback: 'dio feedback',
+  memoria_project_describe: 'describió el proyecto',
+  memoria_save_prompt: 'guardó el pedido',
+}
+const CX_EMOJI: Record<string, string> = { '🐛': 'bug_fix', '💡': 'discovery', '⚙': 'config', '🏛': 'architecture', '🧭': 'decision', '🎓': 'lesson', '🧩': 'pattern', '⭐': 'preference', '📋': 'session_summary', '🗺': 'context' }
+const CX_ROWS = 5
+const CX_READS = new Set(['memoria_search', 'memoria_recall', 'memoria_get', 'memoria_hint', 'memoria_context', 'memoria_recent', 'memoria_timeline', 'memoria_session_find', 'memoria_pending', 'memoria_projects', 'memoria_stats'])
+const CX_SAVES = new Set(['memoria_save', 'memoria_update'])
+const CX_AWK = 'd=$(date +%F); echo "$d"; awk -v k="$1" -v f="$2" -v d="$d" \'NR>=k && (f==0 || index($0,d)) {print NR "\\t" $0} END {print NR}\' "$3"'
+let cxLog = { path: '', primed: false, line: 0, size: 0, mtime: 0, day: '', missing: false, busy: false, events: [] as CxEvent[] }
 let forgeMissing = false
 let forgeDraft = ''
 const forgeGroup: Record<string, string> = {}
@@ -1513,7 +1542,37 @@ function draw($: any, e: any) {
 
   if (tab === 'cortex') {
     const s = cortex.stats
-    if (!s) out.push(card('cx-main', '◉ CORTEX', C.purple, [t([span(cortex.err ? '✖ ' + cortex.err : 'leyendo Cortex…', cortex.err ? C.red : C.muted)])]))
+    const tally = cxTally(cxLog.events)
+    const both = cxLog.events.some((ev) => ev.ws === 'wibond')
+    const num = (n: number, color: string, pad: number) => span(String(n).padStart(pad), n ? color : C.dim, n ? { bold: true } : {})
+    const row = (label: string, k: 'brought' | 'reads' | 'saves' | 'nudges', color: string) =>
+      t([span(label.padEnd(14), C.muted), num(tally.personal[k], color, 9), ...(both ? [num(tally.wibond[k], C.cyan, 8)] : [])])
+    const ICON: Record<string, [string, string]> = { context: ['◉', C.purple], hint: ['◈', C.cyan], nudge: ['⚑', C.amber], memoria_save: ['✚', C.lime], memoria_update: ['✎', C.lime] }
+    const lastRows = cxLog.events.slice(-6).reverse().map((ev) => {
+      const [g, gc] = ICON[ev.kind === 'tool' ? ev.tool : ev.kind] || (CX_READS.has(ev.tool) ? ['⌕', C.violet] : ['·', C.dim])
+      const ids = ev.ids.slice(0, 2).map((id) => `#${id}`).join(' ') + (ev.ids.length > 2 ? ` +${ev.ids.length - 2}` : '')
+      const what = ev.kind === 'nudge' ? 'pidió guardar lo aprendido' : ev.titles[0] || (ev.kind === 'tool' ? ev.tool.replace(/^memoria_/, '') : ev.kind)
+      const head = `${ev.ts.slice(11, 16)} `
+      const tag = ev.ws === 'wibond' ? 'wb ' : ''
+      const room = Math.max(6, w - head.length - tag.length - 2 - (ids ? ids.length + 1 : 0))
+      return t([span(head, C.dim), span(tag, C.cyan), span(g + ' ', gc, { bold: true }), span(ids ? ids + ' ' : '', C.orange), span(clip(what, room), C.text)])
+    })
+    const activity = card('cx-activity', '◎ ACTIVIDAD · HOY', C.cyan, [
+      ...(cxLog.missing
+        ? [t([span('sin registro de cortex-recall todavía', C.dim)])]
+        : !cxLog.events.length
+          ? [t([span('sin actividad hoy · esperando al hook', C.dim)])]
+          : [
+              t([span(''.padEnd(14), C.dim), span('PERSONAL'.padStart(9), C.purple, { bold: true }), ...(both ? [span('WIBOND'.padStart(8), C.cyan, { bold: true })] : [])]),
+              row('TRAÍDAS', 'brought', C.lime),
+              row('CONSULTAS', 'reads', C.text),
+              row('GUARDADAS', 'saves', C.lime),
+              row('RECORDATORIOS', 'nudges', C.amber),
+              t([span('─ LO ÚLTIMO ' + '─'.repeat(Math.max(0, w - 12)), C.dim)]),
+              ...lastRows,
+            ]),
+    ])
+    if (!s) out.push(card('cx-main', '◉ CORTEX', C.purple, [t([span(cortex.err ? '✖ ' + cortex.err : 'leyendo Cortex…', cortex.err ? C.red : C.muted)])]), activity)
     else {
       out.push(
         card('cx-main', '◉ CORTEX · MEMORIA', C.purple, [
@@ -1523,6 +1582,7 @@ function draw($: any, e: any) {
           kv([span('RACHA ', C.muted), span(`${s.current_streak} días`, C.orange, { bold: true })], [span(`${s.active_days} días activos`, C.dim)]),
           ...(cortex.err ? [t([span('✖ ' + cortex.err, C.red)])] : []),
         ]),
+        activity,
       )
       const bugs = s.bug_fix_count ?? 0
       const decisions = s.decisions_count ?? 0
@@ -2024,6 +2084,205 @@ async function refreshCortex($: any) {
   } finally {
     cortexBusy = false
     $.ui.invalidate('ui.render')
+  }
+}
+
+export const cxEvent = (x: any): CxEvent => ({
+  ts: String(x?.ts || ''),
+  kind: String(x?.kind || ''),
+  ws: x?.workspace === 'wibond' ? 'wibond' : 'personal',
+  tool: String(x?.tool || '').replace(/^mcp__.+?__/, ''),
+  ids: (Array.isArray(x?.ids) ? x.ids : []).map(Number).filter(Number.isFinite),
+  titles: Array.isArray(x?.titles) ? x.titles.map((s: unknown) => oneLine(s)) : x?.title ? [oneLine(x.title)] : [],
+  types: Array.isArray(x?.types) ? x.types.map((s: unknown) => String(s || '')) : [],
+  projects: Array.isArray(x?.projects) ? x.projects.map((s: unknown) => String(s || '')) : [],
+  workspaces: Array.isArray(x?.workspaces) ? x.workspaces.map((s: unknown) => String(s || '')) : [],
+  session: String(x?.session || ''),
+  project: String(x?.project || ''),
+  prompt: oneLine(x?.prompt),
+})
+
+export const cxTally = (events: readonly CxEvent[]) => {
+  const zero = () => ({ brought: 0, reads: 0, saves: 0, nudges: 0 })
+  const by = { personal: zero(), wibond: zero() }
+  for (const ev of events) {
+    const b = ev.ws === 'wibond' ? by.wibond : by.personal
+    if (ev.kind === 'context' || ev.kind === 'hint') b.brought += ev.ids.length
+    else if (ev.kind === 'nudge') b.nudges++
+    else if (ev.kind === 'tool' && CX_SAVES.has(ev.tool)) b.saves++
+    else if (ev.kind === 'tool' && CX_READS.has(ev.tool)) b.reads++
+  }
+  return by
+}
+
+export const cxTool = (tool: unknown) => /^mcp__.*?cortex.*?__(memoria_\w+)$/.exec(String(tool || ''))?.[1]
+
+const cxText = (v: any): string => {
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map(cxText).join('\n')
+  if (!v || typeof v !== 'object') return ''
+  if (typeof v.text === 'string') return v.text
+  return v.content !== undefined ? cxText(v.content) : ''
+}
+
+export const cxHits = (output: unknown): CxHit[] => {
+  const lines = cxText(output).split('\n')
+  const out = new Map<number, CxHit>()
+  lines.forEach((line, i) => {
+    const row = /#(\d+)(?: \[([\w.-]+)\])? · ([a-z_]+) · (.+?) · \d{4}-\d\d-\d\d/.exec(line)
+    if (row) {
+      if (!out.has(+row[1])) out.set(+row[1], { id: +row[1], type: row[3], project: row[4], workspace: row[2] || '', title: oneLine(lines[i + 1]).replace(/^title: /, '') })
+      return
+    }
+    const hint = /^\s*(\S+)\s+#(\d+)(?: \[([\w.-]+)\])? (.+) \(\d+(?:\.\d+)?\)(?: · .*)?$/.exec(line)
+    if (hint && !out.has(+hint[2])) out.set(+hint[2], { id: +hint[2], type: CX_EMOJI[hint[1].replace(/\uFE0F/g, '')] || '', project: '', workspace: hint[3] || '', title: hint[4] })
+  })
+  return [...out.values()]
+}
+
+const cxArg = (tool: string, input: any) => {
+  const i = input && typeof input === 'object' ? input : {}
+  if (tool === 'memoria_get') return (Array.isArray(i.ids) ? i.ids : [i.id]).filter((x: unknown) => x !== undefined).map((x: unknown) => `#${x}`).join(' ')
+  if (tool === 'memoria_timeline' && i.id !== undefined) return `#${i.id}`
+  if (CX_SAVES.has(tool)) return i.project ? `en ${i.project}` : ''
+  const v = i.query ?? i.symptom ?? i.context ?? i.title ?? i.goal
+  return v ? `«${clip(oneLine(v), 40)}»` : ''
+}
+
+export const cxCalls = (calls: readonly any[]) => {
+  const verbs = new Map<string, number>()
+  const read = new Map<number, CxHit>()
+  const saved: CxHit[] = []
+  for (const c of calls) {
+    const tool = cxTool(c.tool)
+    if (!tool) continue
+    const label = [CX_VERBS[tool] || tool.replace(/^memoria_/, ''), cxArg(tool, c.input)].filter(Boolean).join(' ')
+    verbs.set(label, (verbs.get(label) || 0) + 1)
+    if (CX_SAVES.has(tool)) {
+      const id = Number(/#(\d+)/.exec(cxText(c.output))?.[1] ?? c.input?.id)
+      if (Number.isFinite(id)) saved.push({ id, type: String(c.input?.type || ''), project: String(c.input?.project || ''), workspace: '', title: oneLine(c.input?.title || '') })
+    } else for (const h of cxHits(c.output)) if (!read.has(h.id)) read.set(h.id, h)
+  }
+  return { verbs: [...verbs].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)), read: [...read.values()], saved }
+}
+
+const cxHue = (type: string) => ({ bug_fix: C.red, discovery: C.cyan, config: C.violet, architecture: C.purple, decision: C.orange, lesson: C.amber, pattern: C.lime, preference: C.pink })[type] || C.muted
+
+const cxRow = (Text: any, h: CxHit, accent: string, skipProject = '') =>
+  Text({
+    wrap: 'truncate',
+    children: [
+      Text({ color: cxHue(h.type), children: ['▍'] }),
+      Text({ color: accent, bold: true, children: [` #${h.id}`] }),
+      ...(h.workspace ? [Text({ color: C.amber, children: [` [${h.workspace}]`] })] : []),
+      Text({ color: C.text, children: [` ${h.title || '…'}`] }),
+      ...(h.project && h.project !== skipProject ? [Text({ color: C.dim, children: [` · ${h.project}`] })] : []),
+    ],
+  })
+
+const cxCard = ({ Box, Text }: any, accent: string, glyph: string, head: string, tag: string, rows: any[]) =>
+  Box({
+    flexDirection: 'column',
+    borderStyle: 'round',
+    borderColor: accent,
+    paddingX: 1,
+    children: [
+      Box({
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        columnGap: 2,
+        children: [
+          Box({ flexShrink: 1, children: [Text({ wrap: 'truncate', children: [Text({ color: accent, bold: true, children: [`${glyph} CORTEX`] }), Text({ color: C.dim, children: [' 記憶 '] }), Text({ color: C.text, children: [`▸ ${head}`] })] })] }),
+          ...(tag ? [Box({ flexShrink: 0, children: [Text({ color: C.dim, children: [tag] })] })] : []),
+        ],
+      }),
+      ...rows,
+    ],
+  })
+
+export const cxPromptKey = (text: unknown) => oneLine(text).slice(0, 100)
+
+const cxEventCard = (ui: any, ev: CxEvent) => {
+  const accent = ev.kind === 'context' ? C.purple : C.cyan
+  const hits: CxHit[] = ev.ids.map((id, i) => ({ id, title: ev.titles[i] || '', type: ev.types[i] || '', project: ev.projects[i] || '', workspace: ev.workspaces[i] || '' }))
+  const rows = hits.slice(0, CX_ROWS).map((h) => cxRow(ui.Text, h, accent, ev.kind === 'context' ? ev.project : ''))
+  if (hits.length > CX_ROWS) rows.push(ui.Text({ wrap: 'truncate', color: C.dim, children: [`  + ${hits.length - CX_ROWS} más · memoria_get con el #id trae el detalle`] }))
+  const n = `${hits.length} ${hits.length === 1 ? 'memoria' : 'memorias'}`
+  const head = ev.kind === 'context' ? `cargó ${n} de ${ev.project}` : `trajo ${n} para este pedido`
+  return cxCard(ui, accent, ev.kind === 'context' ? '◉' : '◈', head, `${ev.ws} · ${ev.ts.slice(11, 16)}`, rows)
+}
+
+const cxContextAt = new Map<string, string>()
+
+const cxEventsFor = (text: string) => {
+  const prompt = cxPromptKey(text)
+  const mine = cxLog.events.filter((ev) => ev.session === sessionId && ev.ids.length)
+  const out: CxEvent[] = []
+  const ctx = mine.filter((ev) => ev.kind === 'context').at(-1)
+  if (ctx && prompt) {
+    const key = ctx.ts + ctx.ids.join(',')
+    if (!cxContextAt.has(key)) cxContextAt.set(key, prompt)
+    if (cxContextAt.get(key) === prompt) out.push(ctx)
+  }
+  const hint = mine.filter((ev) => ev.kind === 'hint' && ev.prompt && ev.prompt === prompt).at(-1)
+  if (hint) out.push(hint)
+  return out
+}
+
+const cxToolCard = (ui: any, calls: readonly any[]) => {
+  const { verbs, read, saved } = cxCalls(calls)
+  const live = calls.some((c) => c.isRunning)
+  const failed = calls.some((c) => c.isErrored)
+  const accent = failed ? C.red : saved.length ? C.lime : C.violet
+  const glyph = live ? SPIN[frame % 4] : failed ? '✖' : saved.length ? '✚' : '⌕'
+  const single = calls.length === 1
+  const head = single ? verbs[0] || 'Cortex' : `${calls.length} consultas`
+  const rows: any[] = []
+  if (!single && verbs.length) rows.push(ui.Text({ wrap: 'truncate', color: C.muted, children: [verbs.join(' · ')] }))
+  for (const h of saved) rows.push(cxRow(ui.Text, h, C.lime))
+  for (const h of read.slice(0, CX_ROWS)) rows.push(cxRow(ui.Text, h, accent))
+  if (read.length > CX_ROWS) rows.push(ui.Text({ wrap: 'truncate', color: C.dim, children: [`  + ${read.length - CX_ROWS} memorias más`] }))
+  if (live && !rows.length) rows.push(ui.Text({ color: C.dim, children: ['consultando…'] }))
+  const tag = read.length ? `${read.length} ${read.length === 1 ? 'memoria' : 'memorias'}` : ''
+  return cxCard(ui, accent, glyph, head, tag, rows)
+}
+
+async function readCortexLog($: any) {
+  if (cxLog.busy || !cxLog.path) return
+  cxLog.busy = true
+  try {
+    const st = await $.fs.stat(cxLog.path).catch(() => undefined)
+    if (!st) {
+      const had = cxLog.events.length > 0 || !cxLog.missing
+      cxLog = { ...cxLog, primed: true, line: 0, size: 0, mtime: 0, missing: true, events: [] }
+      if (had && tab === 'cortex') $.ui.invalidate('ui.render')
+      return
+    }
+    if (cxLog.primed && st.mtimeMs === cxLog.mtime && st.size === cxLog.size) return
+    const reset = !cxLog.primed || st.size < cxLog.size
+    const r = await $.process.run(['sh', '-c', CX_AWK, 'sh', String(reset ? 1 : cxLog.line + 1), reset ? '1' : '0', cxLog.path], { timeoutMs: 5000 }).catch(() => undefined)
+    if (r?.exitCode !== 0) return
+    const rows = String(r.stdout || '').split('\n').filter(Boolean)
+    const day = rows.shift() || ''
+    const end = Number(rows.pop())
+    if (!day || !Number.isFinite(end)) return
+    let line = end
+    const added: CxEvent[] = []
+    for (const row of rows) {
+      const tabAt = row.indexOf('\t')
+      const nr = Number(row.slice(0, tabAt))
+      try {
+        const ev = cxEvent(JSON.parse(row.slice(tabAt + 1)))
+        if (ev.ts.startsWith(day)) added.push(ev)
+      } catch {
+        if (nr === end) line = end - 1
+      }
+    }
+    const kept = reset ? [] : cxLog.events.filter((ev) => ev.ts.startsWith(day))
+    cxLog = { ...cxLog, primed: true, line, size: st.size, mtime: st.mtimeMs, day, missing: false, events: [...kept, ...added].slice(-5000) }
+    if (added.length && (tab === 'cortex' || added.some((ev) => ev.session === sessionId && (ev.kind === 'context' || ev.kind === 'hint')))) $.ui.invalidate('ui.render')
+  } finally {
+    cxLog.busy = false
   }
 }
 
@@ -2615,6 +2874,7 @@ export function register(on: any) {
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
     configDir = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '')
+    cxLog.path = String((await $.env.get('CORTEX_RECALL_EVENTS').catch(() => '')) || (home ? `${home}/.cache/cortex-recall/events.jsonl` : ''))
     await refreshTasks($)
     await loadEmails($)
     quiet = (await $.store.get('quiet').catch(() => false)) === true
@@ -2637,6 +2897,10 @@ export function register(on: any) {
     if (tab === 'live') void refreshLive($)
     if (tab === 'forge') refreshForge($)
     if (tab === 'cortex') refreshCortex($)
+    await readCortexLog($)
+    $.clock.every(3000, () => {
+      readCortexLog($)
+    })
     $.clock.every(125, () => {
       frame++
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
@@ -2915,6 +3179,7 @@ export function register(on: any) {
 
   on('ui.render', { component: 'ToolUse' }, async ($: any, e: any, next: any) => {
     if (quiet || e.surface !== 'terminal' || !e.props.tool) return next(e)
+    if (cxTool(e.props.tool)) return cxToolCard($.ui.resolve(e), [e.props])
     const { Box, Text } = $.ui.resolve(e)
     const { g, c } = toolGlyph(e.props)
     const { name, arg } = toolHead(String(e.props.tool), e.props.input)
@@ -2926,11 +3191,29 @@ export function register(on: any) {
   on('ui.render', { component: 'ToolGroup' }, async ($: any, e: any, next: any) => {
     const calls: any[] = e.props.calls || []
     if (quiet || e.surface !== 'terminal' || e.props.isExpanded || !calls.length) return next(e)
-    const { Text } = $.ui.resolve(e)
-    const live = calls.find((x) => x.isRunning)
-    const { g, c } = toolGlyph({ isRunning: !!live, isErrored: calls.some((x) => x.isErrored), isInterrupted: calls.some((x) => x.isInterrupted) })
+    const ui = $.ui.resolve(e)
+    const { Box, Text } = ui
+    const cx = calls.filter((x) => cxTool(x.tool))
+    const rest = cx.length ? calls.filter((x) => !cxTool(x.tool)) : calls
+    if (!rest.length) return cxToolCard(ui, cx)
+    const live = rest.find((x) => x.isRunning)
+    const { g, c } = toolGlyph({ isRunning: !!live, isErrored: rest.some((x) => x.isErrored), isInterrupted: rest.some((x) => x.isInterrupted) })
     const now = live ? toolHead(live.tool, live.input) : undefined
-    return Text({ wrap: 'truncate', children: [Text({ color: c, children: [g + ' '] }), Text({ color: C.muted, children: [groupSummary(calls)] }), ...(now ? [Text({ color: C.dim, children: [`  ${now.name}${now.arg && live.tool !== 'Bash' ? ' ' + now.arg : ''}`] })] : [])] })
+    const line = Text({ wrap: 'truncate', children: [Text({ color: c, children: [g + ' '] }), Text({ color: C.muted, children: [groupSummary(rest)] }), ...(now ? [Text({ color: C.dim, children: [`  ${now.name}${now.arg && live.tool !== 'Bash' ? ' ' + now.arg : ''}`] })] : [])] })
+    return cx.length ? Box({ flexDirection: 'column', children: [line, cxToolCard(ui, cx)] }) : line
+  })
+
+  on('ui.render', { component: 'UserMessage' }, async ($: any, e: any, next: any) => {
+    if (quiet || e.surface !== 'terminal' || e.props.task || e.props.from) return next(e)
+    const found = cxEventsFor(String(e.props.text || ''))
+    if (!found.length) return next(e)
+    const rest = await next(e)
+    try {
+      const ui = $.ui.resolve(e)
+      return ui.Box({ flexDirection: 'column', children: [rest, ...found.map((ev) => cxEventCard(ui, ev))] })
+    } catch {
+      return rest
+    }
   })
 
   on('ui.render', { component: 'AssistantMessage' }, async ($: any, e: any, next: any) => {

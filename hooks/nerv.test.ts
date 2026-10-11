@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { liveBattery, liveLens } from './register'
+import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveLens } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -286,6 +286,151 @@ test('las tools se dibujan con los glifos del tema y el grupo resume en castella
   expect(JSON.stringify(await bad.drawn())).toContain('✖ ')
   const group: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolGroup', requestId: 'g', props: { isActive: false, isExpanded: false, calls: [{ tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }] } })
   expect(JSON.stringify(await group.drawn())).toContain('2 lecturas · 1 comando')
+})
+
+test('la cuenta de Cortex separa los workspaces', () => {
+  const hint = cxEvent({ ts: '2026-10-09T10:52:35', kind: 'hint', workspace: 'personal', session: 's1', ids: [406, 3113, 7], titles: ['Mouse/cursor frizado en Hyprland con NVIDIA', 'Otra'] })
+  const tally = cxTally([
+    hint,
+    cxEvent({ kind: 'context', workspace: 'wibond', ids: [1, 2] }),
+    cxEvent({ kind: 'tool', tool: 'mcp__cortex__memoria_search', ids: [] }),
+    cxEvent({ kind: 'tool', tool: 'memoria_update', ids: [5] }),
+    cxEvent({ kind: 'nudge', workspace: 'wibond', tools: 30 }),
+  ])
+  expect(tally.personal).toEqual({ brought: 3, reads: 1, saves: 1, nudges: 0 })
+  expect(tally.wibond).toEqual({ brought: 2, reads: 0, saves: 0, nudges: 1 })
+})
+
+test('CORTEX lee el registro de cortex-recall en tandas y no tira toasts', async ($, on) => {
+  mock.env(on, { HOME: '/h', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const toasts: string[] = []
+  on('ui.toast', async (_$: any, e: any) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('session.id', async () => ({ value: 's1' }))
+  const line = (o: any) => JSON.stringify({ ts: '2026-10-09T10:50:00', workspace: 'personal', project: 'nerv', session: 's1', ...o })
+  let size = 200
+  let out = ['2026-10-09', `1\t${line({ kind: 'context', ids: [1, 2, 3], titles: ['a', 'b', 'c'] })}`, `2\t${line({ kind: 'tool', tool: 'memoria_search', ids: [], title: 'algo' })}`, '2']
+  const awk: string[][] = []
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path !== '/x/events.jsonl') throw new Error('ENOENT')
+    return { value: { kind: 'file', size, mtimeMs: size, isLink: false } }
+  })
+  on('fs.read', async () => ({ value: '' }))
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] !== 'sh' || e.argv.at(-1) !== '/x/events.jsonl') return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    awk.push(e.argv.slice(3))
+    return { value: { exitCode: 0, stdout: out.join('\n') + '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect(awk[0]).toEqual(['sh', '1', '1', '/x/events.jsonl'])
+  expect(toasts.filter((x) => x.includes('CORTEX'))).toEqual([])
+  size = 500
+  out = [
+    '2026-10-09',
+    `3\t${line({ ts: '2026-10-09T10:52:35', kind: 'hint', ids: [406, 3113], titles: ['Mouse/cursor frizado', 'Otra cosa'] })}`,
+    `4\t${line({ ts: '2026-10-09T10:53:00', kind: 'tool', tool: 'memoria_save', session: 'otra', ids: [4001], title: 'De otra sesión' })}`,
+    `5\t${line({ ts: '2026-10-09T10:54:00', kind: 'tool', tool: 'memoria_save', workspace: 'wibond', ids: [4002], title: 'Gotcha de Delta' })}`,
+    `6\t{"ts": "2026-10-09T10:5`,
+    '6',
+  ]
+  await clock.advance(3000)
+  expect(awk.at(-1)).toEqual(['sh', '3', '0', '/x/events.jsonl'])
+  expect(toasts.filter((x) => x.includes('CORTEX'))).toEqual([])
+  size = 600
+  out = ['2026-10-09', '6']
+  await clock.advance(3000)
+  expect(awk.at(-1)).toEqual(['sh', '6', '0', '/x/events.jsonl'])
+  await $.command.run({ command: 'nerv', args: 'cortex' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('ACTIVIDAD · HOY')
+  expect(drawn).toContain('WIBOND')
+  expect(drawn).toContain('LO ÚLTIMO')
+  expect(drawn).toContain('#4002')
+  expect(drawn).toContain('Gotcha de Delta')
+})
+
+test('Cortex reconoce sus tools, las líneas del hook y las memorias de cada salida', () => {
+  expect(cxTool('mcp__cortex__memoria_search')).toBe('memoria_search')
+  expect(cxTool('mcp__cortex-wibond__memoria_get')).toBe('memoria_get')
+  expect(cxTool('mcp__eco__search')).toBeUndefined()
+  expect(cxPromptKey('que es\n  muonline ?')).toBe('que es muonline ?')
+  const search = '🔎 Cortex · 2 resultados · "muonline"\n\n⚙️ #868 · config · gon · 2026-07-11 · kw\n   OlympusMU desplegado en hosting del cliente\n   Desplegué…\n\n📋 #3365 · session_summary · gon · 2026-10-08 · kw+sem .85\n   Contexto de la ultima compactacion (gon)'
+  expect(cxHits(search)).toEqual([
+    { id: 868, type: 'config', project: 'gon', workspace: '', title: 'OlympusMU desplegado en hosting del cliente' },
+    { id: 3365, type: 'session_summary', project: 'gon', workspace: '', title: 'Contexto de la ultima compactacion (gon)' },
+  ])
+  expect(cxHits('🎯 Cortex · 1 caso parecido\n\n🐛 #4012 [wibond] · bug_fix · balance-investment-v2 · 2026-09-20 · kw+sem .88\n   CashIn duplicado por reintento')).toEqual([{ id: 4012, type: 'bug_fix', project: 'balance-investment-v2', workspace: 'wibond', title: 'CashIn duplicado por reintento' }])
+  expect(cxHits([{ type: 'text', text: '⚙️ #868 · config · gon · 2026-07-11\ntitle: OlympusMU desplegado\nwhat: x' }])).toEqual([{ id: 868, type: 'config', project: 'gon', workspace: '', title: 'OlympusMU desplegado' }])
+  expect(cxHits('⚡ Cortex · 2 hints\n💡 #925 Entrega de premios MU rota: web usa GremoryCase (0.39) · kw\n📋 #3365 [telecom] Contexto de la ultima compactacion (gon) (0.42) · kw+sem .86')).toEqual([
+    { id: 925, type: 'discovery', project: '', workspace: '', title: 'Entrega de premios MU rota: web usa GremoryCase' },
+    { id: 3365, type: 'session_summary', project: '', workspace: 'telecom', title: 'Contexto de la ultima compactacion (gon)' },
+  ])
+  const got = cxCalls([
+    { tool: 'mcp__cortex__memoria_search', input: { query: 'muonline' }, output: search },
+    { tool: 'mcp__cortex__memoria_search', input: { query: 'muonline' }, output: search },
+    { tool: 'mcp__cortex__memoria_projects', input: {}, output: '📁 Cortex · 134 proyectos' },
+    { tool: 'mcp__cortex__memoria_save', input: { title: 'Webhook WhatsApp', type: 'lesson', project: 'nerv' }, output: [{ type: 'text', text: '✅ Cortex saved #4107 · 🎓 lesson · nerv' }] },
+    { tool: 'Read', input: { file_path: '/x' } },
+  ])
+  expect(got.verbs).toEqual(['buscó «muonline» ×2', 'listó proyectos', 'guardó en nerv'])
+  expect(got.read.map((h) => h.id)).toEqual([868, 3365])
+  expect(got.saved).toEqual([{ id: 4107, type: 'lesson', project: 'nerv', workspace: '', title: 'Webhook WhatsApp' }])
+})
+
+test('el chat dibuja la actividad de Cortex como tarjeta NERV', async ($, on) => {
+  on('ui.render', { component: 'UserMessage' }, (_$: any, e: any) => _$.ui.resolve(e).Text({ children: [String(e.props.text)] }))
+  mock.env(on, { HOME: '/h', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  on('session.id', async () => ({ value: 's1' }))
+  const line = (o: any) => JSON.stringify({ ts: '2026-10-09T11:40:00', workspace: 'personal', project: 'gon', session: 's1', ...o })
+  const out = [
+    '2026-10-09',
+    `1\t${line({ kind: 'context', ids: [3365, 3983, 1, 2, 3, 4, 5], titles: ['Contexto de la ultima compactacion', 'DroidCam no llega a la PC', 'c', 'd', 'e', 'f', 'g'], types: ['session_summary', 'bug_fix'], projects: ['gon', 'gon'] })}`,
+    `2\t${line({ ts: '2026-10-09T11:41:00', kind: 'hint', ids: [925, 4012], titles: ['Entrega de premios MU rota', 'CashIn duplicado'], types: ['discovery', 'bug_fix'], projects: ['sourceathenas', 'balance-investment-v2'], workspaces: ['', 'wibond'], prompt: 'que es muonline ?' })}`,
+    '2',
+  ]
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path !== '/x/events.jsonl') throw new Error('ENOENT')
+    return { value: { kind: 'file', size: 300, mtimeMs: 300, isLink: false } }
+  })
+  on('fs.read', async () => ({ value: '' }))
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] !== 'sh' || e.argv.at(-1) !== '/x/events.jsonl') return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: out.join('\n') + '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  let n = 0
+  const mount = async (component: string, props: any) => JSON.stringify(await (await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component, requestId: `${component}-${++n}`, props })).drawn())
+  const first = await mount('UserMessage', { text: 'que es\nmuonline ?', origin: 'user', isExpanded: false })
+  expect(first).toContain('cargó 7 memorias de gon')
+  expect(first).toContain('DroidCam no llega a la PC')
+  expect(first).toContain('+ 2 más')
+  expect(first).toContain('trajo 2 memorias para este pedido')
+  expect(first).toContain('[wibond]')
+  expect(first).toContain('Entrega de premios MU rota')
+  expect(first).toContain('sourceathenas')
+  expect(first).toContain('round')
+  const second = await mount('UserMessage', { text: 'otra cosa', origin: 'user', isExpanded: false })
+  expect(second).toContain('otra cosa')
+  expect(second).not.toContain('CORTEX')
+  const group = await mount('ToolGroup', {
+    isActive: false,
+    isExpanded: false,
+    calls: [
+      { tool_use_id: 't1', tool: 'ToolSearch', input: { query: 'select:mcp__cortex__memoria_search' }, isRunning: false, isErrored: false, isInterrupted: false },
+      { tool_use_id: 't2', tool: 'mcp__cortex__memoria_search', input: { query: 'muonline' }, isRunning: false, isErrored: false, isInterrupted: false, output: [{ type: 'text', text: '⚙️ #868 · config · gon · 2026-07-11 · kw\n   OlympusMU desplegado' }] },
+    ],
+  })
+  expect(group).toContain('1 tool cargada')
+  expect(group).toContain('buscó «muonline»')
+  expect(group).toContain('OlympusMU desplegado')
 })
 
 test('EN VIVO muestra las dos cámaras, el micrófono y sus botones lanzan los overlays', async ($, on) => {
