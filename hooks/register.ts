@@ -53,7 +53,10 @@ const SPIN = ['◐', '◓', '◑', '◒']
 let quiet = false
 let placedOnce = false
 let paneOpen = false
+let away = false
+let fast: { cancel: () => void }[] = []
 let tab = 'magi'
+let pinned = ''
 let frame = 0
 let working = false
 let turnStart = 0
@@ -286,6 +289,13 @@ export const missionNotify = (root: string, project: string, took: string, unver
   const body = `<b>${escHtml(project)}</b>  ·  <font color="${c.orange}">⏱ ${took}</font>  ·  ${check}`
   return ['notify-send', '-a', 'NERV', '-i', `${root}/assets/mission-complete.png`, 'MISSION COMPLETE', body]
 }
+export const missionWindow = (project: string, took: string, unverified: number) => [
+  'omarchy-shell',
+  'shell',
+  'summon',
+  'gon.nerv-mission',
+  JSON.stringify({ project, took, unverified }),
+]
 const ago = (ms: number) => {
   const m = Math.floor(ms / 60000)
   return m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.floor(m / 60)} h` : `hace ${Math.floor(m / 1440)} d`
@@ -720,6 +730,46 @@ async function herdrJson($: any, args: string[]) {
   }
 }
 
+async function checkFocus($: any) {
+  const r = await herdrJson($, ['pane', 'get', paneId])
+  if (!r?.pane) return
+  const was = away
+  away = r.pane.focused === false
+  if (!was && away) stopFast()
+  if (was && !away) {
+    startFast($)
+    refreshLocal($)
+    $.ui.invalidate('ui.render')
+  }
+}
+
+function stopFast() {
+  for (const t of fast) t.cancel()
+  fast = []
+}
+
+function startFast($: any) {
+  stopFast()
+  fast.push(
+    $.clock.every(125, () => {
+      frame++
+      if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
+      if (quiet || !paneOpen || away) return
+      if (tab === 'hw' && frame % 24 === 0) refreshHw($)
+      if (tab === 'live' && frame % 12 === 0) void refreshLive($)
+      if (tab === 'forge' && frame % 8 === 0) refreshForge($)
+      if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
+      if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
+      if (tab === 'yt' && frame % 8 === 0) ytPoll($)
+      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
+    }),
+    $.clock.every(50, () => {
+      if (quiet || !paneOpen || away || tab !== 'magi' || folded.has('sync') || !gauges.length) return
+      for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
+    }),
+  )
+}
+
 async function loadRecap($: any) {
   const all = ((await $.store.get('sessions').catch(() => undefined)) || {}) as Record<string, any>
   const cut = now() - 7 * 86400000
@@ -1077,6 +1127,11 @@ function draw($: any, e: any) {
     if (x.id === 'yt') ytPoll($)
     $.ui.invalidate('ui.render')
   }
+  const togglePin = () => {
+    pinned = pinned === tab ? '' : tab
+    void savePrefs($, { pinned: pinned || null })
+    $.ui.invalidate('ui.render')
+  }
   const tabButton = (x: (typeof TABS)[number]) =>
     Box({
       key: 'tabbox-' + x.id,
@@ -1109,8 +1164,15 @@ function draw($: any, e: any) {
         ),
       }),
     )
-  else for (let i = 0; i < TABS.length; i += perRow)
-    out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 && !compact ? 1 : 0, children: TABS.slice(i, i + perRow).map(tabButton) }))
+  const pinButton = Button({ key: 'tab-pin', label: pinned === tab ? '📌 fijada' : '📌 fijar', plain: true, dimColor: pinned !== tab, onPress: togglePin })
+  const pinFits = !narrow && TABS.length % perRow !== 0
+  if (!narrow)
+    for (let i = 0; i < TABS.length; i += perRow) {
+      const row = TABS.slice(i, i + perRow).map(tabButton)
+      if (pinFits && i + perRow >= TABS.length) row.push(Box({ key: 'tabbox-pin', width: cellW, justifyContent: 'center', children: [pinButton] }))
+      out.push(Box({ key: 'tabrow-' + i, flexDirection: 'row', columnGap: 1, marginTop: i === 0 && !compact ? 1 : 0, children: row }))
+    }
+  if (!narrow && !pinFits) out.push(Box({ key: 'tab-pinrow', flexDirection: 'row', justifyContent: 'flex-end', children: [pinButton] }))
   out.push(t([span('─'.repeat(Math.max(0, cols)), C.dim)]))
   const headN = out.length
   if (tab !== bodyTab) {
@@ -1986,6 +2048,15 @@ async function savePrefs($: any, patch: Record<string, unknown>) {
   prefsStamp = (await $.fs.stat(prefsPath()).catch(() => undefined))?.mtimeMs ?? prefsStamp
 }
 
+function enterTab($: any, id: string) {
+  if (id === 'hw') refreshHw($)
+  if (id === 'live') void refreshLive($)
+  if (id === 'forge') refreshForge($)
+  if (id === 'nodd') refreshNodd($)
+  if (id === 'cortex') refreshCortex($)
+  if (id === 'yt') ytPoll($)
+}
+
 async function syncPrefs($: any) {
   if (!home) return
   const st = await $.fs.stat(prefsPath()).catch(() => undefined)
@@ -1998,6 +2069,15 @@ async function syncPrefs($: any) {
     return
   }
   if (typeof p.theme === 'string' && p.theme !== themeId) applyTheme(p.theme)
+  if ('pinned' in p) {
+    const next = TABS.some((x) => x.id === p.pinned) ? p.pinned : ''
+    if (next && next !== pinned && next !== tab) {
+      tab = next
+      $.store.set('tab', tab).catch(() => undefined)
+      enterTab($, tab)
+    }
+    pinned = next
+  }
   if (Array.isArray(p.folded)) {
     folded.clear()
     for (const k of p.folded) folded.add(String(k))
@@ -2542,7 +2622,21 @@ const claudeName = (id: string) => {
   const m = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d))?(?:-\d{8})?$/.exec(id)
   return m ? `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? '.' + m[3] : ''}` : id
 }
-const nice = (id: string) => forge?.labels?.[id] || claudeName(bare(id))
+const acctOf = (id: string) => (groupOf(id) === 'claude' ? String(forge?.accounts?.claude || '') : groupOf(id))
+const isWork = (id: string) => (forge?.work || []).includes(groupOf(id))
+const baseName = (id: string) => {
+  const a = acctOf(id)
+  const l = forge?.labels?.[id] || claudeName(bare(id))
+  return a && l.endsWith(` · ${a}`) ? l.slice(0, -(a.length + 3)) : l
+}
+const nice = (id: string) => (acctOf(id) ? `${baseName(id)} · ${acctOf(id)}` : baseName(id))
+const fitModel = (id: string, width: number) => {
+  const a = acctOf(id)
+  if (!a) return clip(baseName(id), width)
+  const room = Math.max(4, width - a.length - 3)
+  const base = baseName(id).length > room ? baseName(id).replace(/^Claude /, '') : baseName(id)
+  return `${clip(base, room)} · ${a}`
+}
 const FACTORY_ORDER = ['turbo', 'barato', 'equilibrado', 'calidad', 'solo-claude', 'openai', 'gemini', 'open-source']
 const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal: 'min', low: 'low', medium: 'med', high: 'high', xhigh: 'xhigh' }
 const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')
@@ -2626,7 +2720,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
       Box({
         flexDirection: 'row',
         justifyContent: 'space-between',
-        children: [t([span(p.name.toUpperCase().padEnd(10), col, { bold: true }), span(clip(nice(p.model), Math.max(8, w - 11 - effTag.length)), C.text)]), t([span(effTag, C.orange)])],
+        children: [t([span(p.name.toUpperCase().padEnd(10), col, { bold: true }), span(fitModel(p.model, Math.max(8, w - 11 - effTag.length)), isWork(p.model) ? C.red : C.text, { bold: isWork(p.model) })]), t([span(effTag, C.orange)])],
       }),
     )
     if (st !== 'pending') {
@@ -2724,33 +2818,38 @@ function drawForge($: any, e: any, out: any[], h: any) {
     const mOpen = openDrop === 'fmodel-' + p
     const eOpen = openDrop === 'feffort-' + p
     const group = forgeGroup[p] || groupOf(current)
-    const curLabel = current ? nice(current) : 'elegí modelo'
+    const acct = current ? acctOf(current) : ''
+    const name = current ? baseName(current) : 'elegí modelo'
     const effLabel = note ? '⚡ n/a' : `⚡ ${EFFORT_SHORT[effort] || effort} ${eOpen ? '▴' : '▾'}`
+    const work = !!current && isWork(current)
     modelRows.push(
       Box({
         key: 'mrow-' + p,
         flexDirection: 'row',
         justifyContent: 'space-between',
         children: [
-          Box({
-            key: 'mrl-' + p,
-            flexDirection: 'row',
-            children: [
-              t([span(p.toUpperCase().padEnd(10), mOpen || eOpen ? C.lime : C.cyan, { bold: true })]),
-              pill('ddh-fmodel-' + p, `${clip(curLabel, w - 22)} ${mOpen ? '▴' : '▾'}`, mOpen, C.text, () => {
-                openDrop = mOpen ? '' : 'fmodel-' + p
-                forgeGroup[p] = groupOf(current)
-                forgeAccounts[p] = false
-                $.ui.invalidate('ui.render')
-              }),
-            ],
-          }),
+          t([span(p.toUpperCase().padEnd(10), mOpen || eOpen ? C.lime : C.cyan, { bold: true }), ...(acct ? [span(acct, work ? C.red : C.muted, { bold: work })] : [])]),
           note
             ? t([span(effLabel, C.dim)])
             : pill('ddh-feffort-' + p, effLabel, eOpen, effort === 'auto' ? C.dim : C.orange, () => {
                 openDrop = eOpen ? '' : 'feffort-' + p
                 $.ui.invalidate('ui.render')
               }),
+        ],
+      }),
+    )
+    modelRows.push(
+      Box({
+        key: 'mrow2-' + p,
+        flexDirection: 'row',
+        paddingLeft: 2,
+        children: [
+          pill('ddh-fmodel-' + p, `${clip(name, Math.max(8, w - 10))} ${mOpen ? '▴' : '▾'}`, mOpen, C.text, () => {
+            openDrop = mOpen ? '' : 'fmodel-' + p
+            forgeGroup[p] = groupOf(current)
+            forgeAccounts[p] = false
+            $.ui.invalidate('ui.render')
+          }),
         ],
       }),
     )
@@ -2766,8 +2865,8 @@ function drawForge($: any, e: any, out: any[], h: any) {
         ),
       )
     } else if (mOpen) {
-      let models = (catalog[group] || []).map((id) => ({ value: id, label: nice(id) }))
-      if (group === groupOf(current) && current && !models.some((m) => m.value === current)) models = [{ value: current, label: `${nice(current)} ⚠ no está en el CPAM` }, ...models]
+      let models = (catalog[group] || []).map((id) => ({ value: id, label: baseName(id) }))
+      if (group === groupOf(current) && current && !models.some((m) => m.value === current)) models = [{ value: current, label: `${baseName(current)} ⚠ no está en el CPAM` }, ...models]
       modelRows.push(
         item(`ddg-back-${p}`, '‹', C.cyan, `cuentas · ${forge.groupLabels?.[group] || group}`, false, () => {
           forgeAccounts[p] = true
@@ -2804,7 +2903,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
       )
     if (eOpen && note) modelRows.push(t([span('  ' + clip(note, w - 2), C.dim)]))
   }
-  out.push(h.scard('forge-models', '⬡ MODELOS · EFFORT', C.violet, modelRows, 9))
+  out.push(h.scard('forge-models', '⬡ MODELOS · EFFORT', C.violet, modelRows, 12))
 
   const control: any[] = [
     Box({
@@ -2884,6 +2983,7 @@ export function register(on: any) {
     ytRecent = ((await $.store.get('ytRecent').catch(() => [])) as string[]) || []
     applyTheme(String((await $.store.get('theme').catch(() => '')) || 'eva01'))
     await syncPrefs($)
+    if (pinned) tab = pinned
     const unit = home ? await $.fs.read(`${home}/.config/systemd/user/jcode-rail.service`).catch(() => '') : ''
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
@@ -2901,27 +3001,16 @@ export function register(on: any) {
     $.clock.every(3000, () => {
       readCortexLog($)
     })
-    $.clock.every(125, () => {
-      frame++
-      if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
-      if (quiet || !paneOpen) return
-      if (tab === 'hw' && frame % 24 === 0) refreshHw($)
-      if (tab === 'live' && frame % 12 === 0) void refreshLive($)
-      if (tab === 'forge' && frame % 8 === 0) refreshForge($)
-      if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
-      if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
-      if (tab === 'yt' && frame % 8 === 0) ytPoll($)
-      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
-    })
-    $.clock.every(50, () => {
-      if (quiet || !paneOpen || tab !== 'magi' || folded.has('sync') || !gauges.length) return
-      for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
-    })
+    startFast($)
+    if (paneId)
+      $.clock.every(2000, () => {
+        if (!quiet) checkFocus($)
+      })
     $.clock.every(1000, () => {
       syncPrefs($)
     })
     $.clock.every(20000, () => {
-      if (!quiet) refreshLocal($)
+      if (!quiet && !away) refreshLocal($)
     })
     $.clock.every(60000, () => {
       beat($)
@@ -2951,7 +3040,7 @@ export function register(on: any) {
     }
     if (arg === 'debug') {
       const panes = await $.ui.panes().catch((err: any) => String(err))
-      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet }
+      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, away, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet }
       return { text: 'nerv debug: ' + JSON.stringify(st) + ' panes=' + JSON.stringify(panes) }
     }
     if (arg.startsWith('cuenta')) {
@@ -3081,7 +3170,9 @@ export function register(on: any) {
     if (!e.isAborted && took > LONG_TURN_MS && !quiet) {
       const msg = `${project || 'Claude'} · ${mmss(took)}${unverified.size ? ` · ⚠ ${unverified.size} sin verificar` : ''}`
       $.ui.toast(`MISSION COMPLETE · ${msg}`, { timeoutMs: 6000 })
-      $.process.run(missionNotify($.plugin.root, project || 'Claude', mmss(took), unverified.size, C), { timeoutMs: 5000 }).catch(() => undefined)
+      const shown = await $.process.run(missionWindow(project || 'Claude', mmss(took), unverified.size), { timeoutMs: 5000 }).catch(() => undefined)
+      if (shown?.exitCode !== 0 || String(shown?.stdout || '').trim() !== 'ok')
+        $.process.run(missionNotify($.plugin.root, project || 'Claude', mmss(took), unverified.size, C), { timeoutMs: 5000 }).catch(() => undefined)
     }
     take(await $.session.usage().catch(() => undefined))
     refreshLocal($)

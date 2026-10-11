@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveLens } from './register'
+import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveLens, missionNotify, missionWindow } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -123,7 +123,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await $.command.run({ command: 'nerv', args: 'forge' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   const drawn = JSON.stringify(await m.drawn())
-  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash', 'Claude Sonnet 5.5']) expect(drawn).toContain(s)
+  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash · ag3', 'Claude Sonnet 5.5 ▾', 'personal']) expect(drawn).toContain(s)
   await m.press({ key: 'profile-turbo' })
   expect(drawn).not.toContain('ddp-fmodel-veredicto-')
   await m.press({ key: 'ddh-fmodel-veredicto' })
@@ -286,6 +286,44 @@ test('las tools se dibujan con los glifos del tema y el grupo resume en castella
   expect(JSON.stringify(await bad.drawn())).toContain('✖ ')
   const group: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'ToolGroup', requestId: 'g', props: { isActive: false, isExpanded: false, calls: [{ tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }] } })
   expect(JSON.stringify(await group.drawn())).toContain('2 lecturas · 1 comando')
+})
+
+test('la notificacion de escritorio lleva icono, colores del tema y escapa el proyecto', async () => {
+  const c = { orange: '#ff7a1a', amber: '#f59e0b', lime: '#a3e635' }
+  const pend = missionNotify('/m', 'a<b>&c', '2:31', 2, c)
+  expect(pend.slice(0, 6)).toEqual(['notify-send', '-a', 'NERV', '-i', '/m/assets/mission-complete.png', 'MISSION COMPLETE'])
+  expect(pend[6]).toContain('<b>a&lt;b&gt;&amp;c</b>')
+  expect(pend[6]).toContain('<font color="#ff7a1a">⏱ 2:31</font>')
+  expect(pend[6]).toContain('<font color="#f59e0b"><b>⚠ 2 sin verificar</b></font>')
+  expect(missionNotify('/m', 'auno', '0:45', 0, c)[6]).toContain('<font color="#a3e635">✓ verificado</font>')
+})
+
+test('la ventana de MISSION COMPLETE se abre por el shell de Omarchy con el resumen en JSON', () => {
+  const argv = missionWindow('eco', '4:12', 2)
+  expect(argv.slice(0, 4)).toEqual(['omarchy-shell', 'shell', 'summon', 'gon.nerv-mission'])
+  expect(JSON.parse(argv[4])).toEqual({ project: 'eco', took: '4:12', unverified: 2 })
+})
+
+test('sin foco en herdr la barra se duerme y al volver el foco despierta', async ($, on) => {
+  mock.env(on, { HOME: '/h', HERDR_PANE_ID: 'w1:p1' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  let focused = false
+  const asked: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] !== 'herdr') return { value: { exitCode: 1, stdout: '', stderr: '' } }
+    asked.push(e.argv)
+    return { value: { exitCode: 0, stdout: JSON.stringify({ result: { pane: { pane_id: 'w1:p1', focused } } }), stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect((await state($)).away).toBe(false)
+  await clock.advance(2000)
+  expect(asked.some((a) => a.join(' ') === 'herdr pane get w1:p1')).toBe(true)
+  expect((await state($)).away).toBe(true)
+  focused = true
+  await clock.advance(2000)
+  expect((await state($)).away).toBe(false)
 })
 
 test('la cuenta de Cortex separa los workspaces', () => {
@@ -513,6 +551,62 @@ test('YOUTUBE: el + sin nada sonando pone sólo ese tema, una vez, con un solo r
   expect(players[0]).toContain('https://direct/bbbbbbb')
   expect(launched.some((a) => a.includes('nerv-yt-fill'))).toBe(false)
   expect(sent.join('').match(/loadfile/g) || []).toHaveLength(0)
+})
+
+test('la chinche fija la pestaña, una sesión nueva arranca ahí y tocarla de nuevo la suelta', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const files: Record<string, string> = {}
+  on('fs.write', async (_$: any, e: any) => {
+    files[e.path] = e.text
+  })
+  on('fs.read', async (_$: any, e: any) => ({ value: files[e.path] ?? '' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'tab-live' })
+  await m.press({ key: 'tab-pin' })
+  expect(JSON.parse(files['/h/.local/state/nerv/prefs.json']).pinned).toBe('live')
+  expect(JSON.stringify(await m.drawn())).toContain('📌 fijada')
+  await m.press({ key: 'tab-magi' })
+  expect(JSON.stringify(await m.drawn())).toContain('📌 fijar')
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect(JSON.stringify(await m.drawn())).toContain('◆ EN VIVO')
+  await m.press({ key: 'tab-pin' })
+  expect(JSON.parse(files['/h/.local/state/nerv/prefs.json']).pinned).toBeNull()
+})
+
+test('si otra sesión fija una pestaña, la barra abierta salta a esa pestaña', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const files: Record<string, string> = {}
+  let stamp = 1
+  on('fs.write', async (_$: any, e: any) => {
+    files[e.path] = e.text
+    stamp++
+  })
+  on('fs.read', async (_$: any, e: any) => ({ value: files[e.path] ?? '' }))
+  on('fs.stat', async (_$: any, e: any) => {
+    if (!(e.path in files)) throw new Error('ENOENT')
+    return { value: { kind: 'file', size: files[e.path].length, mtimeMs: stamp, isLink: false } }
+  })
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'tab-forge' })
+  expect(JSON.stringify(await m.drawn())).toContain('◆ FORGE')
+  files['/h/.local/state/nerv/prefs.json'] = JSON.stringify({ pinned: 'live' })
+  stamp++
+  await clock.advance(1500)
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('◆ EN VIVO')
+  expect(drawn).toContain('📌 fijada')
+  await m.press({ key: 'tab-magi' })
+  await clock.advance(1500)
+  expect(JSON.stringify(await m.drawn())).toContain('◆ MAGI')
 })
 
 test('en la terminal angosta del celu la barra junta encabezado, pestañas y effort en una fila cada uno', async ($, on) => {
