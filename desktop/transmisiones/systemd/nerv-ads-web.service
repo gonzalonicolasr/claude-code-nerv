@@ -1,0 +1,9 @@
+[Unit]
+Description=NERV: web local para configurar las transmisiones
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/share/nerv-ads/web/server.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

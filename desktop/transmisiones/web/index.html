@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NERV · Transmisiones</title>
+<style>
+:root {
+  --ink: #060408;
+  --bg: #0a070c;
+  --panel: #110c14;
+  --line: #2a1f2e;
+  --line2: #3d2c42;
+  --paper: #e9dfd2;
+  --dim: #8a7a90;
+  --mute: #5e5164;
+  --red: #e0201b;
+  --orange: #ff7a1a;
+  --lime: #9cff3a;
+  --serif: "Noto Serif CJK JP", "Noto Serif CJK", serif;
+  --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--paper); font: 13px/1.45 var(--mono); }
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgba(224, 32, 27, .10), transparent 60%),
+    radial-gradient(900px 400px at -10% 110%, rgba(255, 122, 26, .06), transparent 60%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px),
+    var(--bg);
+}
+header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 14px 28px; background: rgba(6, 4, 8, .92); backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 12px; }
+.brand .k { font: 900 26px/1 var(--serif); color: var(--red); letter-spacing: 2px; }
+.brand .t { font: 700 12px var(--serif); letter-spacing: 4px; color: var(--paper); }
+.brand .s { font-size: 10px; color: var(--mute); letter-spacing: 2px; }
+.status { margin-left: auto; display: flex; gap: 14px; align-items: center; color: var(--dim); font-size: 11px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mute); display: inline-block; margin-right: 6px; }
+.dot.on { background: var(--lime); box-shadow: 0 0 8px var(--lime); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+main { max-width: 1240px; margin: 0 auto; padding: 22px 28px 80px; }
+.bar {
+  display: grid; grid-template-columns: auto 1fr 1fr 1fr auto; gap: 18px; align-items: end;
+  padding: 16px 18px; background: var(--panel); border: 1px solid var(--line); position: relative;
+}
+.bar::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--red); }
+.sec { display: flex; align-items: center; gap: 10px; margin: 30px 0 12px; }
+.sec h2 { margin: 0; font: 900 15px var(--serif); letter-spacing: 3px; }
+.sec h2 b { color: var(--red); margin-right: 10px; }
+.sec .rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--line2), transparent); }
+label.f { display: flex; flex-direction: column; gap: 5px; font-size: 10px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; }
+input, select {
+  font: 13px var(--mono); color: var(--paper); background: var(--ink); border: 1px solid var(--line2);
+  padding: 7px 9px; outline: none; border-radius: 0; width: 100%;
+}
+input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 1px rgba(255,122,26,.25); }
+input[type=range] { padding: 0; accent-color: var(--red); }
+input[type=color] { padding: 0; height: 32px; width: 44px; cursor: pointer; }
+.val { color: var(--paper); font-size: 12px; text-transform: none; letter-spacing: 0; }
+.btn {
+  font: 700 11px var(--mono); letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer;
+  color: var(--paper); background: transparent; border: 1px solid var(--line2); padding: 8px 14px; white-space: nowrap;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.btn:hover { border-color: var(--orange); color: var(--orange); }
+.btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.primary:hover { background: #ff3b2f; color: #fff; }
+.btn.danger:hover { border-color: var(--red); color: var(--red); }
+.btn:disabled { opacity: .35; cursor: default; }
+.sw { position: relative; width: 40px; height: 20px; flex: none; cursor: pointer; }
+.sw input { display: none; }
+.sw span { position: absolute; inset: 0; border: 1px solid var(--line2); background: var(--ink); transition: .2s; }
+.sw span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; background: var(--mute); transition: .2s; }
+.sw input:checked + span { border-color: var(--lime); }
+.sw input:checked + span::after { left: 23px; background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+.toggle { display: flex; align-items: center; gap: 10px; font-size: 10px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 18px; }
+.site { background: var(--panel); border: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.site.off { opacity: .55; }
+.site .top { display: flex; align-items: center; gap: 10px; }
+.site .num { font: 900 13px var(--serif); color: var(--mute); }
+.site .tools { margin-left: auto; display: flex; gap: 6px; }
+.site .tools .btn { padding: 6px 9px; }
+.fields { display: grid; grid-template-columns: 90px 1fr 1fr; gap: 10px; }
+.fields .w2 { grid-column: span 2; }
+.fields .w3 { grid-column: 1 / -1; }
+.colors { display: flex; gap: 14px; align-items: end; }
+.stage { display: flex; justify-content: center; padding: 12px 0; background: repeating-linear-gradient(45deg, #0c080e 0 10px, #0e0a10 10px 20px); border: 1px solid var(--line); }
+.ad {
+  --edge: #ff3b2f; --spark: #ff8a3d;
+  position: relative; width: 448px; height: 112px; background: var(--ink); overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--edge) 45%, black); display: flex; align-items: center;
+  transform-origin: center;
+}
+.ad.play { animation: open .62s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes open {
+  0% { transform: scale(0, .04); filter: brightness(3); }
+  32% { transform: scale(1, .04); filter: brightness(3); }
+  70% { transform: scale(1, 1); filter: brightness(1.4); }
+  78% { opacity: .4; } 84% { opacity: 1; } 90% { opacity: .6; } 100% { opacity: 1; transform: scale(1); filter: none; }
+}
+.ad .bar3 { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--edge); animation: breathe 2.2s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .4; } }
+.ad .art { position: relative; width: 110px; height: 110px; margin-left: 3px; flex: none; cursor: pointer; overflow: hidden; }
+.ad .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ad .art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 70%, var(--ink)); }
+.ad .art .up { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; font-size: 10px; letter-spacing: 1.5px; color: var(--paper); background: rgba(6,4,8,.7); opacity: 0; transition: .15s; }
+.ad .art:hover .up { opacity: 1; }
+.ad .txt { padding: 0 14px; min-width: 0; flex: 1; }
+.ad .hd { font-size: 10px; letter-spacing: 1.5px; color: var(--dim); }
+.ad .tl { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.ad .kj { font: 900 25px/1.25 var(--serif); color: var(--edge); }
+.ad .nm { font: 700 15px var(--serif); letter-spacing: 2px; color: var(--paper); }
+.ad .tg { font-size: 12px; color: #bdb3a8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ad .ln { font: 700 13px var(--mono); color: var(--edge); }
+.ad .cd { position: absolute; right: 0; bottom: 0; height: 2px; width: 100%; background: var(--edge); opacity: .7; }
+.ad .spk { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--spark); box-shadow: 0 0 6px var(--spark); bottom: -4px; animation: rise linear infinite; }
+@keyframes rise { 0% { transform: translateY(0); opacity: 0; } 15% { opacity: .9; } 100% { transform: translateY(-120px); opacity: 0; } }
+.add { border: 1px dashed var(--line2); background: transparent; color: var(--dim); min-height: 200px; display: grid; place-items: center; cursor: pointer; font: 900 14px var(--serif); letter-spacing: 3px; }
+.add:hover { border-color: var(--orange); color: var(--orange); }
+.toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 18px; background: var(--ink); border: 1px solid var(--line2); border-left: 3px solid var(--lime); font-size: 12px; transform: translateY(20px); opacity: 0; transition: .25s; z-index: 10; }
+.toast.show { transform: none; opacity: 1; }
+.toast.err { border-left-color: var(--red); }
+.dirty { color: var(--orange); font-size: 11px; letter-spacing: 1px; display: none; }
+.dirty.on { display: inline; }
+@media (max-width: 900px) {
+  .bar { grid-template-columns: 1fr 1fr; }
+  .grid { grid-template-columns: 1fr; }
+  .ad { transform: scale(.8); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="k">広報部</span><span class="t">NERV · TRANSMISIONES</span><span class="s">PUBLICIDAD DE ESCRITORIO</span></div>
+  <div class="status">
+    <span id="timer"><i class="dot"></i>—</span>
+    <span class="dirty" id="dirty">● cambios sin guardar</span>
+    <button class="btn primary" id="save">Guardar</button>
+  </div>
+</header>
+<main>
+  <div class="sec"><h2><b>作戦</b>AJUSTES</h2><div class="rule"></div></div>
+  <div class="bar">
+    <label class="toggle"><span class="sw"><input type="checkbox" id="enabled"><span></span></span>Activa</label>
+    <label class="f">Cada cuánto <span class="val" id="intervalV"></span><input type="range" id="interval" min="1" max="120" step="1"></label>
+    <label class="f">Cuánto dura <span class="val" id="durationV"></span><input type="range" id="duration" min="4" max="60" step="1"></label>
+    <label class="f">Monitor<select id="screen"></select></label>
+    <button class="btn" id="reset" title="Vuelve a la esquina inferior derecha">Resetear posición</button>
+  </div>
+  <div class="sec"><h2><b>広告</b>SITIOS</h2><div class="rule"></div></div>
+  <div class="grid" id="sites"></div>
+</main>
+<div class="toast" id="toast"></div>
+<input type="file" id="file" accept="image/*" hidden>
+<script>
+const $ = (s, r = document) => r.querySelector(s)
+let cfg = null
+let uploadFor = null
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+
+function toast(msg, err) {
+  const t = $('#toast')
+  t.textContent = msg
+  t.className = 'toast show' + (err ? ' err' : '')
+  clearTimeout(t._h)
+  t._h = setTimeout(() => (t.className = 'toast'), 2600)
+}
+
+function dirty(on = true) { $('#dirty').classList.toggle('on', on) }
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(j.error || j.out || r.statusText)
+  return j
+}
+
+function timerText(t) {
+  const on = cfg.enabled && t && t.ActiveState === 'active'
+  $('#timer').innerHTML = `<i class="dot ${on ? 'on' : ''}"></i>${on ? 'transmitiendo cada ' + cfg.interval_min + ' min' : 'en pausa'}`
+}
+
+function sparks(n) {
+  let s = ''
+  for (let i = 0; i < n; i++) s += `<i class="spk" style="left:${120 + Math.random() * 320}px;animation-duration:${2 + Math.random() * 2.5}s;animation-delay:${-Math.random() * 4}s"></i>`
+  return s
+}
+
+function adHTML(s, i, total) {
+  const art = s.art ? `/img/${encodeURIComponent(s.art)}?v=${s._v || 0}` : ''
+  return `<div class="ad" style="--edge:${s.accent};--spark:${s.spark}">
+    <div class="bar3"></div>
+    <div class="art" data-up="${i}">${art ? `<img src="${art}" alt="">` : ''}<div class="up">CAMBIAR IMAGEN</div></div>
+    <div class="txt">
+      <div class="hd">広報 · TRANSMISIÓN ${String(i + 1).padStart(2, '0')}/${String(total).padStart(2, '0')}</div>
+      <div class="tl"><span class="kj">${esc(s.kanji)}</span><span class="nm">${esc(s.name)}</span></div>
+      <div class="tg">${esc(s.tag)}</div>
+      <div class="ln">${esc(s.label)}  ↗</div>
+    </div>
+    ${sparks(6)}
+    <div class="cd"></div>
+  </div>`
+}
+
+function field(i, key, label, cls = '', type = 'text') {
+  return `<label class="f ${cls}">${label}<input type="${type}" data-i="${i}" data-k="${key}" value="${esc(cfg.sites[i][key])}"></label>`
+}
+
+function render() {
+  const total = cfg.sites.filter((s) => s.enabled).length || 1
+  $('#sites').innerHTML = cfg.sites.map((s, i) => `
+    <section class="site ${s.enabled ? '' : 'off'}">
+      <div class="top">
+        <label class="toggle"><span class="sw"><input type="checkbox" data-i="${i}" data-k="enabled" ${s.enabled ? 'checked' : ''}><span></span></span></label>
+        <span class="num">第${'壱弐参四伍六七八九拾'[i] || i + 1}</span>
+        <div class="tools">
+          <button class="btn" data-act="play" data-i="${i}" title="Repetir la animación">▶</button>
+          <button class="btn" data-act="up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn" data-act="down" data-i="${i}" ${i === cfg.sites.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="btn" data-act="test" data-i="${i}">Probar en pantalla</button>
+          <button class="btn danger" data-act="del" data-i="${i}">✕</button>
+        </div>
+      </div>
+      <div class="stage" id="stage-${i}">${adHTML(s, i, total)}</div>
+      <div class="fields">
+        ${field(i, 'kanji', 'Kanji')}
+        ${field(i, 'name', 'Nombre', 'w2')}
+        ${field(i, 'tag', 'Frase', 'w3')}
+        ${field(i, 'url', 'URL', 'w2')}
+        ${field(i, 'label', 'Texto del link')}
+        <div class="colors w3">
+          <label class="f">Color<input type="color" data-i="${i}" data-k="accent" value="${s.accent}"></label>
+          <label class="f">Chispas<input type="color" data-i="${i}" data-k="spark" value="${s.spark}"></label>
+          <label class="f" style="flex:1">ID<input type="text" data-i="${i}" data-k="id" value="${esc(s.id)}"></label>
+        </div>
+      </div>
+    </section>`).join('') + `<button class="add" id="add">＋ AGREGAR SITIO</button>`
+}
+
+function refreshPreview(i) {
+  const total = cfg.sites.filter((s) => s.enabled).length || 1
+  const st = $('#stage-' + i)
+  if (st) st.innerHTML = adHTML(cfg.sites[i], i, total)
+}
+
+function play(i) {
+  const ad = $('#stage-' + i + ' .ad')
+  if (!ad) return
+  ad.classList.remove('play')
+  void ad.offsetWidth
+  ad.classList.add('play')
+}
+
+function fillBar() {
+  $('#enabled').checked = cfg.enabled
+  $('#interval').value = cfg.interval_min
+  $('#duration').value = cfg.duration_s
+  $('#intervalV').textContent = cfg.interval_min + ' min'
+  $('#durationV').textContent = cfg.duration_s + ' s'
+}
+
+async function load() {
+  const j = await api('/api/config')
+  cfg = j.config
+  const sel = $('#screen')
+  const mons = j.monitors.length ? j.monitors : [{ name: cfg.screen, desc: '' }]
+  sel.innerHTML = mons.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}${m.desc ? ' · ' + esc(m.desc.split(' ').slice(0, 2).join(' ')) : ''}</option>`).join('')
+  sel.value = cfg.screen
+  fillBar()
+  render()
+  timerText(j.timer)
+  cfg.sites.forEach((_, i) => setTimeout(() => play(i), 120 * i))
+  dirty(false)
+}
+
+document.addEventListener('input', (e) => {
+  const el = e.target
+  if (el.id === 'interval') { cfg.interval_min = +el.value; $('#intervalV').textContent = el.value + ' min'; return dirty() }
+  if (el.id === 'duration') { cfg.duration_s = +el.value; $('#durationV').textContent = el.value + ' s'; return dirty() }
+  if (el.id === 'enabled') { cfg.enabled = el.checked; return dirty() }
+  if (el.id === 'screen') { cfg.screen = el.value; return dirty() }
+  if (el.dataset.k) {
+    const i = +el.dataset.i
+    const k = el.dataset.k
+    cfg.sites[i][k] = el.type === 'checkbox' ? el.checked : el.value
+    if (k === 'enabled') render()
+    else refreshPreview(i)
+    dirty()
+  }
+})
+
+document.addEventListener('click', async (e) => {
+  const up = e.target.closest('[data-up]')
+  if (up) { uploadFor = +up.dataset.up; $('#file').click(); return }
+  const b = e.target.closest('[data-act]')
+  if (b) {
+    const i = +b.dataset.i
+    const act = b.dataset.act
+    if (act === 'play') return play(i)
+    if (act === 'up' || act === 'down') {
+      const j = act === 'up' ? i - 1 : i + 1
+      ;[cfg.sites[i], cfg.sites[j]] = [cfg.sites[j], cfg.sites[i]]
+      render(); dirty(); return
+    }
+    if (act === 'del') {
+      if (!confirmDel(i)) return
+      cfg.sites.splice(i, 1); render(); dirty(); return
+    }
+    if (act === 'test') {
+      if ($('#dirty').classList.contains('on')) await save()
+      try { await api('/api/test', { id: cfg.sites[i].id }); toast('Transmitiendo ' + cfg.sites[i].name + ' en ' + cfg.screen) } catch (err) { toast(err.message, true) }
+      return
+    }
+  }
+  if (e.target.id === 'add') {
+    let n = cfg.sites.length + 1
+    while (cfg.sites.some((s) => s.id === 'sitio' + n)) n++
+    cfg.sites.push({ id: 'sitio' + n, enabled: true, kanji: '新規', name: 'NUEVO SITIO', tag: 'Una frase corta que venda', url: 'https://', label: 'tusitio.com', accent: '#ff3b2f', spark: '#ff8a3d', art: '' })
+    render(); dirty(); play(cfg.sites.length - 1)
+  }
+})
+
+let pendingDel = -1
+function confirmDel(i) {
+  if (pendingDel === i) { pendingDel = -1; return true }
+  pendingDel = i
+  toast('Tocá ✕ otra vez para borrar ' + cfg.sites[i].name)
+  setTimeout(() => (pendingDel = -1), 3000)
+  return false
+}
+
+$('#file').addEventListener('change', async (e) => {
+  const f = e.target.files[0]
+  e.target.value = ''
+  if (!f || uploadFor === null) return
+  const i = uploadFor
+  const data = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f) })
+  try {
+    const j = await api('/api/image', { id: cfg.sites[i].id, data })
+    cfg.sites[i].art = j.art
+    cfg.sites[i]._v = Date.now()
+    refreshPreview(i); play(i); dirty()
+    toast('Imagen lista, falta guardar')
+  } catch (err) { toast(err.message, true) }
+})
+
+async function save() {
+  try {
+    const body = { ...cfg, sites: cfg.sites.map(({ _v, ...s }) => s) }
+    const j = await api('/api/config', body)
+    const vs = cfg.sites.map((s) => s._v)
+    cfg = j.config
+    cfg.sites.forEach((s, i) => (s._v = vs[i]))
+    timerText(j.timer)
+    dirty(false)
+    toast('Guardado')
+  } catch (err) { toast(err.message, true) }
+}
+
+$('#save').addEventListener('click', save)
+$('#reset').addEventListener('click', async () => { await api('/api/reset-pos', {}); toast('Posición reseteada: vuelve abajo a la derecha') })
+document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save() } })
+window.addEventListener('beforeunload', (e) => { if ($('#dirty').classList.contains('on')) e.preventDefault() })
+load().catch((err) => toast('No pude leer la config: ' + err.message, true))
+</script>
+</body>
+</html>

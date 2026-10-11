@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "gon.nerv-ads",
+  "name": "NERV · Transmisiones",
+  "version": "1.0.0",
+  "author": "Gon",
+  "license": "MIT",
+  "description": "Cartel estilo Evangelion que aparece cada tanto con los sitios de Gon. Se arrastra y recuerda la posición.",
+  "kinds": ["panel"],
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}

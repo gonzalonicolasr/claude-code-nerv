@@ -1,0 +1,10 @@
+[Unit]
+Description=NERV: transmisión cada 10 minutos
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

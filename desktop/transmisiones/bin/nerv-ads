@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -uo pipefail
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/nerv-ads
+CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/nerv-ads
+mkdir -p "$STATE"
+
+case ${1:-next} in
+  reset) rm -f "$STATE/pos.json"; exit 0 ;;
+  close) omarchy-shell shell summon gon.nerv-ads '{"close":true}' >/dev/null 2>&1; exit 0 ;;
+esac
+
+[[ ${1:-next} == next ]] && pgrep -x hyprlock >/dev/null && exit 0
+
+PAYLOAD=$(python3 - "$CONFIG" "$STATE" "${1:-next}" <<'PY'
+import json, os, sys
+cfg_dir, state, want = sys.argv[1:]
+cfg = json.load(open(os.path.join(cfg_dir, "config.json")))
+sites = cfg.get("sites", [])
+pool = [s for s in sites if s.get("enabled", True)]
+if want == "next":
+    if not cfg.get("enabled", True) or not pool:
+        sys.exit(3)
+    nxt = os.path.join(state, "next")
+    try:
+        i = int(open(nxt).read().strip()) % len(pool)
+    except (OSError, ValueError):
+        i = 0
+    open(nxt, "w").write(str((i + 1) % len(pool)))
+    site = pool[i]
+    index, total = i + 1, len(pool)
+else:
+    match = [s for s in sites if s.get("id") == want]
+    if not match:
+        sys.exit(2)
+    site = match[0]
+    index = pool.index(site) + 1 if site in pool else 1
+    total = max(1, len(pool))
+site = dict(site)
+art = site.get("art", "")
+if art and not art.startswith("/"):
+    site["art"] = os.path.join(cfg_dir, "img", art)
+try:
+    pos = json.load(open(os.path.join(state, "pos.json")))
+except (OSError, ValueError):
+    pos = {}
+out = {"site": site, "index": index, "total": total, "duration": int(float(cfg.get("duration_s", 12)) * 1000), "screen": pos.get("screen", cfg.get("screen", "DP-1"))}
+if pos.get("screen", out["screen"]) == out["screen"] and "x" in pos and "y" in pos:
+    out.update(x=int(pos["x"]), y=int(pos["y"]))
+print(json.dumps(out, ensure_ascii=False))
+PY
+)
+case $? in
+  0) ;;
+  2) echo "no existe el sitio '$1' en $CONFIG/config.json" >&2; exit 2 ;;
+  *) exit 0 ;;
+esac
+omarchy-shell shell summon gon.nerv-ads "$PAYLOAD"

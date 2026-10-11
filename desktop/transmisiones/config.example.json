@@ -1,0 +1,56 @@
+{
+  "enabled": true,
+  "interval_min": 1,
+  "duration_s": 12,
+  "screen": "DP-1",
+  "sites": [
+    {
+      "id": "cortex",
+      "enabled": true,
+      "kanji": "記憶",
+      "name": "CORTEX",
+      "tag": "Memoria persistente para tus agentes IA",
+      "url": "https://www.cortexmem.com",
+      "label": "www.cortexmem.com",
+      "accent": "#ff3b2f",
+      "spark": "#ff8a3d",
+      "art": "cortex.png"
+    },
+    {
+      "id": "atenty",
+      "enabled": true,
+      "kanji": "応答",
+      "name": "ATENTY",
+      "tag": "Tu WhatsApp contesta al toque, 24/7",
+      "url": "https://atenty.com.ar",
+      "label": "atenty.com.ar",
+      "accent": "#ffa21a",
+      "spark": "#7ee06a",
+      "art": "atenty.png"
+    },
+    {
+      "id": "gonza",
+      "enabled": true,
+      "kanji": "操縦者",
+      "name": "GONZALO ROCCA",
+      "tag": "Backend, agentes de IA y local-first",
+      "url": "https://www.gonzalorocca.com",
+      "label": "www.gonzalorocca.com",
+      "accent": "#9cff3a",
+      "spark": "#a66bff",
+      "art": "gonza.png"
+    },
+    {
+      "id": "sitio4",
+      "enabled": false,
+      "kanji": "新規",
+      "name": "NUEVO SITIO",
+      "tag": "Una frase corta que venda",
+      "url": "https://",
+      "label": "tusitio.com",
+      "accent": "#ff3b2f",
+      "spark": "#ff8a3d",
+      "art": ""
+    }
+  ]
+}

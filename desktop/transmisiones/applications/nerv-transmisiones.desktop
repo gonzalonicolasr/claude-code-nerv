@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=NERV Transmisiones
+Comment=Configurar la publicidad de escritorio
+Exec=@HOME@/.local/bin/google-chrome --app=http://127.0.0.1:7777 --class=NervAds
+Terminal=false
+Type=Application
+Icon=nerv-transmisiones
+StartupNotify=true
+StartupWMClass=NervAds
