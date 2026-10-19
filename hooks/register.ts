@@ -1062,7 +1062,7 @@ function draw($: any, e: any) {
     if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
-  if (!narrow && Image && e.surface === 'terminal') {
+  if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f
     out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source: { file: `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`, format: 'png' }, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))

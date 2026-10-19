@@ -655,7 +655,7 @@ test('EN VIVO sin nerv-discord.json avisa que falta Vencord', async ($, on) => {
   expect(JSON.stringify(await m.drawn())).toContain('falta Vencord')
 })
 
-test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema y no en la terminal angosta', async ($, on) => {
+test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema, también en la terminal angosta', async ($, on) => {
   mock.env(on, { HOME: '/h' })
   mock.store(on)
   on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
@@ -667,5 +667,5 @@ test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema y no en la t
   expect(drawn.indexOf('g0n-img')).toBeLessThan(drawn.indexOf(' NERV '))
   await m.unmount()
   const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, bodyColumns: 40, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } } })
-  expect(JSON.stringify(await n.drawn())).not.toContain('g0n-img')
+  expect(JSON.stringify(await n.drawn())).toContain('g0n-img')
 })
