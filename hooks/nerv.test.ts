@@ -61,8 +61,9 @@ test('/nerv tema cambia la paleta del dibujo y la deja en theme.json', async ($,
   const files: Record<string, string> = {}
   on('fs.write', async (_$: any, e: any) => {
     files[e.path] = e.text
+    return { value: undefined }
   })
-  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
   const bad: any = await $.command.run({ command: 'nerv', args: 'tema eva99' })
@@ -112,7 +113,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
     },
   }
   on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state.json' ? JSON.stringify(state) : '' }))
-  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
   const sent: string[] = []
   on('command.run', { command: 'forge' }, async (_$: any, e: any) => {
     sent.push(e.args)
@@ -169,7 +170,7 @@ test('FORGE separa fábrica, míos y zero-pi, y sus botones crean, restauran y b
     run: null,
   }
   on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state.json' ? JSON.stringify(state) : '' }))
-  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
   const asked: string[] = []
   const answers = ['Prueba X', 'Cancelar', 'Borrar']
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$: any, e: any) => {
@@ -234,7 +235,7 @@ test('la pestaña NODD muestra el estado del mod y sus botones mandan /nodd', as
   }
   on('session.id', async () => ({ value: 's1' }))
   on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/nodd/sessions/s1.json' ? JSON.stringify(state) : '' }))
-  on('process.run', async () => ({ exitCode: 1, stdout: '', stderr: '' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
   const sent: string[] = []
   on('command.run', { command: 'nodd' }, async (_$: any, e: any) => {
     sent.push(e.args)
@@ -559,6 +560,7 @@ test('la chinche fija la pestaña, una sesión nueva arranca ahí y tocarla de n
   const files: Record<string, string> = {}
   on('fs.write', async (_$: any, e: any) => {
     files[e.path] = e.text
+    return { value: undefined }
   })
   on('fs.read', async (_$: any, e: any) => ({ value: files[e.path] ?? '' }))
   on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
@@ -586,6 +588,7 @@ test('si otra sesión fija una pestaña, la barra abierta salta a esa pestaña',
   on('fs.write', async (_$: any, e: any) => {
     files[e.path] = e.text
     stamp++
+    return { value: undefined }
   })
   on('fs.read', async (_$: any, e: any) => ({ value: files[e.path] ?? '' }))
   on('fs.stat', async (_$: any, e: any) => {
