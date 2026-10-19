@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { acctFor, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick } from './register'
+import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -779,4 +779,13 @@ test('CUENTA: priv8 usa el mismo Claude si lo tiene, si no el mismo tipo, si no 
   expect(priv8Pick(ids, 'claude-haiku-4-5')).toBe('priv8/claude-opus-5-5')
   expect(priv8Pick(ids, '')).toBe('priv8/claude-opus-5-5')
   expect(priv8Pick(['ag/claude-opus-5-5', 'nan/qwen3.6'], 'claude-opus-5-5')).toBe('')
+})
+
+test('CPAM: la firma cambia al sumar un prefix o tocar el config.yaml, no por el orden de los archivos', () => {
+  const a: { name: string; prefix?: string }[] = [{ name: 'claude-a.json', prefix: 'ag' }, { name: 'claude-b.json' }]
+  const conf = { mtimeMs: 1, size: 10 }
+  expect(cpamSig(a, conf)).toBe(cpamSig([...a].reverse(), conf))
+  expect(cpamSig([a[0]!, { name: 'claude-b.json', prefix: 'priv8' }], conf)).not.toBe(cpamSig(a, conf))
+  expect(cpamSig(a, { mtimeMs: 2, size: 10 })).not.toBe(cpamSig(a, conf))
+  expect(cpamSig(a)).toBe('claude-a.json=ag,claude-b.json=|0:0')
 })

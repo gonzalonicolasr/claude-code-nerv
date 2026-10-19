@@ -527,7 +527,7 @@ const acctName = (id: string) => (emails[id] || mdl.emails[id] || id).split('@')
 const acctToggle = ($: any) => {
   acctMenu = !acctMenu
   acctNote = ''
-  if (acctMenu && !mdl.ids.length) void refreshModels($)
+  if (acctMenu) void refreshModels($, true)
   $.ui.invalidate('ui.render')
 }
 
@@ -543,7 +543,11 @@ async function switchAccount($: any, id: string) {
   // No reemplaza la sesión: abre una tab nueva de herdr que reanuda esta conversación (fork).
   acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : ''
   if (!acctNote && id === 'priv8' && !mdl.ids.length) await refreshModels($, true)
-  const target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
+  let target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
+  if (!acctNote && id === 'priv8' && !target) {
+    await refreshModels($, true) // la lista cacheada puede ser de antes del prefix
+    target = priv8Pick(mdl.ids, model)
+  }
   if (!acctNote && id === 'priv8' && !target) acctNote = mdl.ids.length ? 'el CPAM no expone priv8/ — falta el prefix' : mdl.err || 'el CPAM no respondió'
   if (!acctNote) {
     await relaunchWith($, target)
@@ -793,6 +797,7 @@ function startFast($: any) {
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (tab === 'models' && frame % 480 === 0) void refreshModels($)
+      if ((tab === 'models' || acctMenu) && frame % 24 === 0) void cpamWatch($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     }),
     $.clock.every(50, () => {
@@ -2748,6 +2753,29 @@ let mdlCpam = false
 let mdlQuery = ''
 let mdlPick = ''
 let mdlNote = ''
+let mdlSig = ''
+
+// Firma de las cuentas del CPAM: json de auth + su prefix, y mtime/size del config.yaml (nunca tokens).
+export const cpamSig = (auth: readonly { name: string; prefix?: string }[], conf?: { mtimeMs?: number; size?: number }) =>
+  auth.map((a) => `${a.name}=${a.prefix || ''}`).sort().join(',') + `|${conf?.mtimeMs ?? 0}:${conf?.size ?? 0}`
+
+async function cpamScan($: any) {
+  const dir = `${home}/.cli-proxy-api`
+  const auth: { name: string; prefix: string; email: string }[] = []
+  for (const f of ((await $.fs.list(dir).catch(() => [])) as any[]).filter((f) => /\.json$/.test(f.name))) {
+    try {
+      const j = JSON.parse((await $.fs.read(`${dir}/${f.name}`).catch(() => '')) || '{}')
+      auth.push({ name: f.name, prefix: String(j?.prefix || ''), email: String(j?.email || '') })
+    } catch {}
+  }
+  return { auth, sig: cpamSig(auth, await $.fs.stat(`${dir}/config.yaml`).catch(() => undefined)) }
+}
+
+// Si cambió el set de cuentas/prefijos del CPAM, la lista cacheada de modelos ya no vale: se relee.
+async function cpamWatch($: any) {
+  if (!home || mdl.busy || !mdlSig) return
+  if ((await cpamScan($)).sig !== mdlSig) void refreshModels($, true)
+}
 
 async function refreshModels($: any, force = false) {
   if (mdl.busy || !home || (!force && now() - mdl.at < 300000 && mdl.ids.length)) return
@@ -2758,6 +2786,7 @@ async function refreshModels($: any, force = false) {
       const cached: any = await $.store.get('mdlCache').catch(() => undefined)
       if (cached?.ids?.length) mdl = { ...mdl, ids: cached.ids, emails: cached.emails || {}, at: cached.at || 0 }
     }
+    const scan = await cpamScan($)
     const r = await $.process
       .run(['sh', '-c', `curl -s -m 8 -H "Authorization: Bearer $("$HOME/.local/bin/claude-go-key")" ${CPAM_URL}/v1/models`], { timeoutMs: 12000 })
       .catch(() => undefined)
@@ -2765,14 +2794,9 @@ async function refreshModels($: any, force = false) {
     if (!ids.length) throw new Error('el CPAM no respondió (127.0.0.1:8317)')
     // Etiquetas de los grupos: prefijo → email, de los json de auth del CPAM (sólo esos dos campos).
     const emails: Record<string, string> = {}
-    const dir = `${home}/.cli-proxy-api`
-    for (const f of ((await $.fs.list(dir).catch(() => [])) as any[]).filter((f) => /\.json$/.test(f.name))) {
-      try {
-        const j = JSON.parse((await $.fs.read(`${dir}/${f.name}`).catch(() => '')) || '{}')
-        if (j?.prefix && j?.email) emails[String(j.prefix)] = String(j.email)
-      } catch {}
-    }
+    for (const a of scan.auth) if (a.prefix && a.email) emails[a.prefix] = a.email
     mdl = { ids, emails, at: now(), err: '', busy: false }
+    mdlSig = scan.sig
     await $.store.set('mdlCache', { ids, emails, at: mdl.at }).catch(() => undefined)
   } catch (err: any) {
     mdl.err = clip(String(err?.message || err), 60)
