@@ -1795,8 +1795,9 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'live') {
-    const nat = (aspect: number) => Math.max(4, Math.min(16, Math.round((w - 4) * 0.47 * aspect)))
-    const sz: Record<string, number> = { cam: nat(live.text ? 272 / 426 : 246 / 426), ip: nat(1152 / 1512) }
+    const nat = (aspect: number) => Math.max(4, Math.min(24, Math.ceil((w + 2) * 0.462 * aspect)))
+    const full: Record<string, number> = { cam: nat(848 / 1328), ip: nat(3 / 4) }
+    const sz: Record<string, number> = { ...full }
     const slot = (key: string) => Box({ key: `live-slot-${key}`, height: sz[key] })
     const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
     const rec = !!(live.cam.on || live.ip.on)
@@ -1900,7 +1901,8 @@ function draw($: any, e: any) {
       const on = (['cam', 'ip'] as const).filter((k) => live[k].on)
       const over = measure(out, cols) + 6 - (e.props.scroll?.bodyRows || 0)
       if (!dock || over <= 0 || !on.length) break
-      for (const k of on) sz[k] = Math.max(3, sz[k] - Math.ceil(over / on.length))
+      const total = on.reduce((a, k) => a + full[k], 0)
+      for (const k of on) sz[k] = Math.max(Math.ceil(full[k] * 0.6), Math.floor(((total - over) * full[k]) / total))
     }
   }
 
