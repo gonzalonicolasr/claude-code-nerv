@@ -107,6 +107,8 @@ let hwBusy = false
 const cpuHist: number[] = []
 const gpuHist: number[] = []
 type LiveCam = { on: boolean; w: number; h: number; fps: number; cpu: number }
+type LiveDcMember = { name: string; self: boolean; speaking: boolean; mute: boolean; deaf: boolean; streaming: boolean }
+type LiveDc = { ch: string; g: string; n: number; m: LiveDcMember[]; live: boolean; vc: number; v: string[] }
 let live: {
   cam: LiveCam
   ip: LiveCam & { mode: string; scene: string; blur: boolean; name: string; bat: number; charging: boolean; lens: string; reach: boolean }
@@ -114,6 +116,7 @@ let live: {
   text: string
   sharing: boolean
   discord: boolean
+  dc: LiveDc | null | undefined
   busy: boolean
   n: number
 } = {
@@ -123,6 +126,7 @@ let live: {
   text: '',
   sharing: false,
   discord: false,
+  dc: undefined,
   busy: false,
   n: 0,
 }
@@ -629,6 +633,7 @@ snap() {
   if [ -z "$p" ]; then printf '%s\\toff\\n' "$1"; return; fi
   printf '%s\\ton\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$(q "$2" width)" "$(q "$2" height)" "$(q "$2" estimated-vf-fps)" "$(ps -o %cpu= -p "$p" | tr -d ' ')"
 }
+printf 'dc\t%s\n' "$(jq -c '{ch:.channel.name,g:.channel.guild,n:(.members|length),m:[.members[:9][]|{name,self,speaking,mute,deaf,streaming}],live:.live.on,vc:.live.count,v:[.live.viewers[:7][].name]}' "$rt/nerv-discord.json" 2>/dev/null)"
 snap cam camoverlay
 snap ip iphonecam
 st=\${XDG_STATE_HOME:-$HOME/.local/state}
@@ -656,6 +661,15 @@ export const liveBattery = (raw: string): { bat: number; charging: boolean } => 
   const j = liveJson(raw)
   const lvl = Number(j?.level ?? j?.battery ?? j?.percent ?? (typeof j === 'number' ? j : NaN))
   return { bat: Number.isFinite(lvl) ? Math.round(lvl <= 1 ? lvl * 100 : lvl) : -1, charging: !!(j?.charging ?? j?.isCharging ?? j?.plugged) }
+}
+
+export const liveDc = (raw: string): LiveDc | null | undefined => {
+  const j = liveJson(raw)
+  if (!j || typeof j !== 'object') return undefined
+  if (!j.ch) return null
+  const m = (Array.isArray(j.m) ? j.m : []).map((x: any) => ({ name: String(x?.name || '?'), self: !!x?.self, speaking: !!x?.speaking, mute: !!x?.mute, deaf: !!x?.deaf, streaming: !!x?.streaming }))
+  const v = (Array.isArray(j.v) ? j.v : []).map((x: any) => String(x || '?'))
+  return { ch: String(j.ch), g: String(j.g || ''), n: Math.max(Number(j.n) || 0, m.length), m, live: !!j.live, vc: Math.max(Number(j.vc) || 0, v.length), v }
 }
 
 export const liveLens = (raw: string): string => {
@@ -697,7 +711,8 @@ async function refreshLive($: any) {
         live.mic.muted = /MUTED/.test(f[1] || '')
         live.mic.vol = Math.round((Number(/[\d.]+/.exec(f[1] || '')?.[0]) || 0) * 100)
         live.mic.name = f[2] || ''
-      } else if (f[0] === 'discord') live.discord = f[1] === '1'
+      } else if (f[0] === 'dc') live.dc = liveDc(f[1] || '')
+      else if (f[0] === 'discord') live.discord = f[1] === '1'
       else if (f[0] === 'sharing') live.sharing = Number(f[1]) > 0
       else if (f[0] === 'ipapi') {
         live.ip.reach = !!f[1]
@@ -766,6 +781,10 @@ function startFast($: any) {
     $.clock.every(50, () => {
       if (quiet || !paneOpen || away || tab !== 'magi' || folded.has('sync') || !gauges.length) return
       for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
+    }),
+    $.clock.every(G0N_MS / 2, () => {
+      if (quiet || !paneOpen || away || g0nShown < 0 || g0nFrame() === g0nShown) return
+      $.ui.invalidate('ui.render')
     }),
   )
 }
@@ -849,39 +868,10 @@ const ramp = (stops: number[], v: number) => {
   return mix(stops[i], stops[i + 1], p - i)
 }
 
-
-const WAVES = {
-  get eva() { return [RGB.lime, RGB.purple] },
-  get alert() { return [RGB.purple, RGB.lime] },
-  get blue() { return [RGB.amber, RGB.orange] },
-}
-
-const softWave = (cols: number, rows: number) => {
-  const h = rows * 2
-  const t = frame * (working ? 0.2 : 0.06)
-  const [hi, lo] = battery() ? WAVES.alert : patternBlue ? WAVES.blue : WAVES.eva
-  const party = now() < confettiUntil
-  const amp = (h - 1) / 2
-  const glintA = (frame * (working ? 0.9 : 0.35)) % (cols + 16) - 8
-  const glintB = cols - ((frame * (working ? 0.7 : 0.25)) % (cols + 16) - 8)
-  const ink = RGB.ink
-  return cells(cols, rows, (x, y) => {
-    if (party && hash(x, y, frame) > 0.9) return [RGB.lime, RGB.pink, RGB.cyan, RGB.amber][Math.floor(hash(y, x, frame) * 4)]
-    const w1 = amp + Math.sin(x * 0.2 + t) * amp * 0.85
-    const w2 = amp + Math.sin(x * 0.13 - t * 0.7 + 1.3) * amp * 0.65
-    const i1 = Math.exp(-((y - w1) ** 2) / 0.45)
-    const i2 = Math.exp(-((y - w2) ** 2) / 0.45)
-    const g1 = Math.exp(-(((x - glintA) / 2.5) ** 2))
-    const g2 = Math.exp(-(((x - glintB) / 2.5) ** 2))
-    const top = Math.max(i1, i2)
-    if (top < 0.12) return RGB.none
-    const front = i1 >= i2
-    const hue = front ? hi : lo
-    const glint = front ? g1 : g2
-    const base = mix(ink, hue, Math.min(1, 0.35 + top * (working ? 0.75 : 0.6)))
-    return mix(base, 0xffffff, glint * top * 0.75)
-  })
-}
+const G0N_FRAMES = 64
+const G0N_MS = 70
+let g0nShown = -1
+const g0nFrame = () => Math.floor(now() / G0N_MS) % G0N_FRAMES
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -1072,6 +1062,11 @@ function draw($: any, e: any) {
     if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
+  if (!narrow && Image && e.surface === 'terminal') {
+    const f = g0nFrame()
+    g0nShown = f
+    out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source: { file: `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`, format: 'png' }, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
+  }
   out.push(
     Box({
       flexDirection: 'row',
@@ -1092,7 +1087,6 @@ function draw($: any, e: any) {
       ],
     }),
   )
-  if (!compact && e.surface === 'terminal' && Raster) out.push(Raster({ key: 'wave', columns: cols, rows: 3, cells: softWave(cols, 3) }))
   if (!compact)
   out.push(
     Box({
@@ -1812,13 +1806,47 @@ function draw($: any, e: any) {
       out.push(
         card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
           kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
-          kv([span('◇ Discord ', C.text)], [span(live.discord ? (narrow ? 'abierto' : 'abierto · sin dato de espectadores') : 'cerrado', live.discord ? C.muted : C.dim)]),
           Box({
             key: 'live-ctl',
             flexDirection: 'row',
             flexWrap: 'wrap',
             children: [chip('live-mic', live.mic.muted ? '🎙 activar' : '🎙 silenciar', live.mic.muted, live.mic.muted ? C.red : C.tabBg, () => void liveRun($, ['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']))],
           }),
+        ]),
+      )
+      const dc = live.discord ? live.dc : undefined
+      const golive = !!dc?.live
+      const dcTitle = !live.discord ? '◇ DISCORD · cerrado' : golive ? `◉ GO LIVE · ${dc!.vc} ${dc!.vc === 1 ? 'mirando' : 'mirándote'}` : dc ? `◇ DISCORD · ${dc.n} en el canal` : '◇ DISCORD'
+      const flag = (x: LiveDcMember) => [x.streaming ? 'EN VIVO' : '', x.deaf ? 'sordo' : x.mute ? 'mudo' : ''].filter(Boolean).join(' · ')
+      out.push(
+        card('live-dc', dcTitle, golive ? C.red : dc ? C.cyan : C.dim, [
+          ...(!live.discord
+            ? [t([span('Discord no está abierto', C.dim)])]
+            : dc === undefined
+              ? [t([span('falta Vencord', C.amber, { bold: true }), span(narrow ? '' : ' · sin nerv-discord.json', C.dim)])]
+              : dc === null
+                ? [t([span('fuera de un canal de voz', C.muted)])]
+                : [
+                    kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(clip(dc.g, 16), C.dim)]),
+                    ...dc.m.map((x, i) =>
+                      Box({
+                        key: 'live-dc-m' + i,
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        children: [
+                          t([span(x.speaking ? '◉ ' : '○ ', x.speaking ? C.lime : C.dim), span(clip(x.name, w - 16) + (x.self ? ' (vos)' : ''), x.speaking ? C.lime : x.deaf || x.mute ? C.muted : C.text, { bold: x.speaking })]),
+                          t([span(flag(x), x.streaming ? C.red : C.dim, { bold: x.streaming })]),
+                        ],
+                      }),
+                    ),
+                    ...(dc.n > dc.m.length ? [t([span(`  +${dc.n - dc.m.length} más`, C.dim)])] : []),
+                    ...(golive
+                      ? [
+                          t([span('MIRAN ', C.red, { bold: true }), span(dc!.v.length ? clip(dc!.v.join(', '), w - 10) : 'nadie todavía', dc!.v.length ? C.text : C.dim)]),
+                          ...(dc!.vc > dc!.v.length ? [t([span(`  +${dc!.vc - dc!.v.length} más`, C.dim)])] : []),
+                        ]
+                      : []),
+                  ]),
         ]),
       )
       out.push(

@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveLens, missionNotify, missionWindow } from './register'
+import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, missionNotify, missionWindow } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -491,6 +491,7 @@ test('EN VIVO muestra las dos cámaras, el micrófono y sus botones lanzan los o
           'ipstate\tcamera\tcafe\t1',
           'text\twww.cortexmem.com',
           'mic\tVolume: 0.63 [MUTED]\tHyperX QuadCast 2 S',
+          'dc\t' + JSON.stringify({ ch: 'general', g: 'NERV HQ', n: 12, m: [{ name: 'gon', self: true, speaking: true, mute: false, deaf: false, streaming: true }, { name: 'rei', self: false, speaking: false, mute: true, deaf: false, streaming: false }], live: true, vc: 9, v: ['asuka', 'shinji'] }),
           'discord\t1',
           'sharing\t1',
           'ipapi\t"iPhone de Gon"\t{"level":87,"charging":true}\t{"active":1,"cameras":["Wide","Ultrawide"]}',
@@ -504,7 +505,8 @@ test('EN VIVO muestra las dos cámaras, el micrófono y sus botones lanzan los o
   await $.command.run({ command: 'nerv', args: 'vivo' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   const drawn = JSON.stringify(await m.drawn())
-  for (const x of ['EN VIVO', 'AL AIRE', 'STREAMCAM · en vivo', '1920×1080', '30 fps', 'SILENCIADO', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%']) expect(drawn).toContain(x)
+  for (const x of ['EN VIVO', 'AL AIRE', 'STREAMCAM · en vivo', '1920×1080', '30 fps', 'SILENCIADO', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%', 'GO LIVE · 9 mirándote', 'general', 'NERV HQ', 'gon (vos)', 'EN VIVO', 'mudo', '+10 más', 'asuka, shinji', '+7 más']) expect(drawn).toContain(x)
+  expect(drawn.indexOf('GO LIVE')).toBeLessThan(drawn.indexOf('STREAMCAM'))
   await m.press({ key: 'live-cam-tg' })
   await m.press({ key: 'live-ip-priv' })
   await m.press({ key: 'live-mic' })
@@ -627,4 +629,43 @@ test('en la terminal angosta del celu la barra junta encabezado, pestañas y eff
   expect(drawn).not.toContain('メ·')
   await m.press({ key: 'tab-yt' })
   expect(JSON.stringify(await m.drawn())).toContain('◆ YOUTUBE')
+})
+
+test('la tarjeta de Discord dice falta Vencord sin el archivo y entiende el canal vacío', () => {
+  expect(liveDc('')).toBeUndefined()
+  expect(liveDc('{"ch":"x"')).toBeUndefined()
+  expect(liveDc('{"ch":null,"n":0,"m":[],"live":null,"vc":null,"v":[]}')).toBeNull()
+  const d = liveDc('{"ch":"general","g":"g","n":3,"m":[{"name":"a","speaking":true}],"live":false,"vc":0,"v":[]}')!
+  expect(d.n).toBe(3)
+  expect(d.m[0]).toEqual({ name: 'a', self: false, speaking: true, mute: false, deaf: false, streaming: false })
+  expect(d.live).toBe(false)
+})
+
+test('EN VIVO sin nerv-discord.json avisa que falta Vencord', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] === 'bash' && e.argv.includes('nerv-live')) return { value: { exitCode: 0, stderr: '', stdout: 'dc\t\ncam\toff\nip\toff\ndiscord\t1\n' } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'vivo' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  expect(JSON.stringify(await m.drawn())).toContain('falta Vencord')
+})
+
+test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema y no en la terminal angosta', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toMatch(/assets\/g0n\/eva01\/\d\d\.png/)
+  expect(drawn.indexOf('g0n-img')).toBeLessThan(drawn.indexOf(' NERV '))
+  await m.unmount()
+  const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, bodyColumns: 40, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } } })
+  expect(JSON.stringify(await n.drawn())).not.toContain('g0n-img')
 })
