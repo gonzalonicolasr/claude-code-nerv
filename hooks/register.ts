@@ -46,6 +46,7 @@ const TABS = [
   { id: 'nodd', label: 'NODD', hotkey: '6' },
   { id: 'cortex', label: 'CORTEX', hotkey: '7' },
   { id: 'yt', label: 'YOUTUBE', hotkey: '8' },
+  { id: 'models', label: 'MODELOS', hotkey: '9' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -776,6 +777,7 @@ function startFast($: any) {
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
+      if (tab === 'models' && frame % 480 === 0) void refreshModels($)
       if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
     }),
     $.clock.every(50, () => {
@@ -1119,6 +1121,7 @@ function draw($: any, e: any) {
     if (x.id === 'nodd') refreshNodd($)
     if (x.id === 'cortex') refreshCortex($)
     if (x.id === 'yt') ytPoll($)
+    if (x.id === 'models') void refreshModels($)
     $.ui.invalidate('ui.render')
   }
   const togglePin = () => {
@@ -1399,6 +1402,7 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
+  if (tab === 'models') drawModels($, e, out, { t, span, card, chip, w })
 
   if (tab === 'yt') {
     const n = yt.now
@@ -2671,6 +2675,243 @@ const FACTORY_ORDER = ['turbo', 'barato', 'equilibrado', 'calidad', 'solo-claude
 const EFFORT_SHORT: Record<string, string> = { auto: 'auto', off: 'off', minimal: 'min', low: 'low', medium: 'med', high: 'high', xhigh: 'xhigh' }
 const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(id) || /^claude-/.test(id) ? 'claude' : id.includes('/') ? id.split('/')[0] : 'cpam')
 
+// ── MODELOS: catálogo del CPAM (CLIProxyAPI local) agrupado por prefijo de cuenta ──
+const CPAM_URL = 'http://127.0.0.1:8317'
+export const MDL_BROKEN: Record<string, string> = { 'nan/glm5.3-flash': 'timeout', 'nan/mimo-v2.6-flash': 'timeout', 'nan/qwen3.6': 'timeout', 'nan/minimax-h3': '401' }
+export type MdlGroup = { key: string; label: string; prefix: string; models: string[] }
+export const mdlSplit = (id: string) => {
+  const i = id.indexOf('/')
+  return i > 0 ? { prefix: id.slice(0, i), name: id.slice(i + 1) } : { prefix: '', name: id }
+}
+const mdlFamily = (name: string) => (/^claude/.test(name) ? 'claude' : /^(gpt|codex|o\d)/.test(name) ? 'gpt' : /^glm/.test(name) ? 'glm' : /^gemini/.test(name) ? 'gemini' : 'otros')
+// Por qué un modelo sale apagado: roto conocido, o no es de chat (imágenes, revisor de codex).
+export const mdlDim = (id: string) => MDL_BROKEN[id] || (/image|auto-review/.test(mdlSplit(id).name) ? 'no chat' : '')
+const FAMILY_LABEL: Record<string, string> = { claude: 'Claude', gpt: 'Codex/GPT', glm: 'GLM', gemini: 'Gemini', otros: 'Otros' }
+const mdlRank = (g: { key: string; prefix: string }) => {
+  if (g.prefix === 'nan') return 0
+  if (!g.prefix) return 1 + Object.keys(FAMILY_LABEL).indexOf(g.key)
+  const ag = /^ag(\d*)$/.exec(g.prefix)
+  if (ag) return 10 + Number(ag[1] || 1)
+  return g.prefix === 'wibond' ? 99 : 50
+}
+export const mdlGroups = (ids: readonly string[], emails: Record<string, string> = {}): MdlGroup[] => {
+  const by = new Map<string, MdlGroup>()
+  for (const id of ids) {
+    const { prefix, name } = mdlSplit(id)
+    const key = prefix ? 'p:' + prefix : mdlFamily(name)
+    if (!by.has(key)) {
+      const who = emails[prefix] ? ' · ' + emails[prefix].split('@')[0] : ''
+      const label = prefix === 'nan' ? 'NaN' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
+      by.set(key, { key: prefix ? prefix : key, label, prefix, models: [] })
+    }
+    by.get(key)!.models.push(id)
+  }
+  const out = [...by.values()]
+  for (const g of out) g.models.sort()
+  return out.sort((a, b) => mdlRank(a) - mdlRank(b) || a.key.localeCompare(b.key))
+}
+export const mdlFilter = (groups: readonly MdlGroup[], q: string): MdlGroup[] => {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return [...groups]
+  return groups
+    .map((g) => ({ ...g, models: g.models.filter((id) => words.every((x) => `${g.label} ${id}`.toLowerCase().includes(x))) }))
+    .filter((g) => g.models.length)
+}
+// El comando que se tipea en la tab nueva de herdr: reanuda esta conversación (fork, así no
+// pisa el transcript de la sesión que sigue abierta) por el CPAM con `id`, o sin `id` vuelve
+// directo a Anthropic. La api-key nunca va acá: la lee el apiKeyHelper en runtime.
+export const mdlLaunchCmd = (o: { id?: string; sid: string; keyHelper: string; configDir?: string }) => {
+  const safe = (s: string) => /^[\w.@:/+-]+$/.test(s)
+  if (!safe(o.sid) || !safe(o.keyHelper) || (o.id && !safe(o.id)) || (o.configDir && !safe(o.configDir))) return ''
+  const cfg = o.configDir ? ` CLAUDE_CONFIG_DIR=${o.configDir}` : ''
+  if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${cfg} claude --resume ${o.sid} --fork-session`
+  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}' --resume ${o.sid} --fork-session --model ${o.id}`
+}
+
+let mdl: { ids: string[]; emails: Record<string, string>; at: number; err: string; busy: boolean } = { ids: [], emails: {}, at: 0, err: '', busy: false }
+let mdlCpam = false
+let mdlQuery = ''
+let mdlPick = ''
+let mdlNote = ''
+
+async function refreshModels($: any, force = false) {
+  if (mdl.busy || !home || (!force && now() - mdl.at < 300000 && mdl.ids.length)) return
+  mdl.busy = true
+  try {
+    mdlCpam = /:8317\b/.test(String((await $.env.get('ANTHROPIC_BASE_URL').catch(() => '')) || ''))
+    if (!mdl.ids.length) {
+      const cached: any = await $.store.get('mdlCache').catch(() => undefined)
+      if (cached?.ids?.length) mdl = { ...mdl, ids: cached.ids, emails: cached.emails || {}, at: cached.at || 0 }
+    }
+    const r = await $.process
+      .run(['sh', '-c', `curl -s -m 8 -H "Authorization: Bearer $("$HOME/.local/bin/claude-go-key")" ${CPAM_URL}/v1/models`], { timeoutMs: 12000 })
+      .catch(() => undefined)
+    const ids = r?.exitCode === 0 ? ((JSON.parse(r.stdout || '{}')?.data || []) as any[]).map((x) => String(x.id)).filter(Boolean) : []
+    if (!ids.length) throw new Error('el CPAM no respondió (127.0.0.1:8317)')
+    // Etiquetas de los grupos: prefijo → email, de los json de auth del CPAM (sólo esos dos campos).
+    const emails: Record<string, string> = {}
+    const dir = `${home}/.cli-proxy-api`
+    for (const f of ((await $.fs.list(dir).catch(() => [])) as any[]).filter((f) => /\.json$/.test(f.name))) {
+      try {
+        const j = JSON.parse((await $.fs.read(`${dir}/${f.name}`).catch(() => '')) || '{}')
+        if (j?.prefix && j?.email) emails[String(j.prefix)] = String(j.email)
+      } catch {}
+    }
+    mdl = { ids, emails, at: now(), err: '', busy: false }
+    await $.store.set('mdlCache', { ids, emails, at: mdl.at }).catch(() => undefined)
+  } catch (err: any) {
+    mdl.err = clip(String(err?.message || err), 60)
+  } finally {
+    mdl.busy = false
+    $.ui.invalidate('ui.render')
+  }
+}
+
+async function relaunchWith($: any, id: string) {
+  const wsId = String((await $.env.get('HERDR_WORKSPACE_ID').catch(() => '')) || '')
+  const cmd = mdlLaunchCmd({ id: id || undefined, sid: sessionId, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
+  mdlNote = !wsId || !paneId ? 'sólo se puede dentro de herdr' : !cmd || !cwdNow ? 'no sé el id o la carpeta de esta sesión' : 'abriendo tab nueva…'
+  $.ui.invalidate('ui.render')
+  if (mdlNote !== 'abriendo tab nueva…') return
+  const label = id ? `${project || 'claude'} · ${clip(id, 24)}` : `${project || 'claude'} · anthropic`
+  const r = await herdrJson($, ['tab', 'create', '--workspace', wsId, '--cwd', cwdNow, '--label', label, '--focus'])
+  const pane = String(r?.root_pane?.pane_id || '')
+  const ran = pane ? await $.process.run(['herdr', 'pane', 'run', pane, cmd], { timeoutMs: 5000 }).catch(() => undefined) : undefined
+  mdlNote = ran?.exitCode === 0 ? `✓ tab "${label}" abierta (fork de esta conversación)` : 'herdr no pudo abrir la tab'
+  mdlPick = ''
+  $.ui.invalidate('ui.render')
+}
+
+async function useHere($: any, id: string) {
+  mdlNote = `cambiando a ${id}…`
+  $.ui.invalidate('ui.render')
+  // /model además guarda el id como default de TODAS las sesiones nuevas; un id del CPAM ahí
+  // rompe las sesiones directas a Anthropic, así que después se devuelve el default que había.
+  const sp = `${configDir || home + '/.claude'}/settings.json`
+  const prevOf = (txt: unknown) => {
+    try {
+      return { ok: true, model: JSON.parse(String(txt))?.model as unknown }
+    } catch {
+      return { ok: false, model: undefined }
+    }
+  }
+  const prev = prevOf(await $.fs.read(sp).catch(() => undefined))
+  const r = await $.command.run({ command: 'model', args: id }).catch((err: any) => ({ text: '✖ ' + String(err?.message || err) }))
+  if (prev.ok) {
+    try {
+      const j = JSON.parse(String(await $.fs.read(sp)))
+      if (j.model !== prev.model) {
+        if (prev.model === undefined) delete j.model
+        else j.model = prev.model
+        await $.fs.write(sp, JSON.stringify(j, null, 2) + '\n')
+      }
+    } catch {}
+  }
+  model = await $.session.model().catch(() => model)
+  mdlNote = clip(String(r?.text || `/model ${id}`).split('\n')[0] || '', 70)
+  mdlPick = ''
+  $.ui.invalidate('ui.render')
+}
+
+function drawModels($: any, e: any, out: any[], h: any) {
+  const { Box, Button, Input } = $.ui.resolve(e)
+  const { t, span, card, chip, w } = h
+  const cur = String(model || '').replace(/\[.*\]$/, '')
+  const groups = mdlFilter(mdlGroups(mdl.ids, mdl.emails), mdlQuery)
+  const total = mdl.ids.length
+  const head: any[] = [
+    t([span('SESIÓN ', C.muted), mdlCpam ? span('● CPAM 8317', C.lime, { bold: true }) : span('● Anthropic directo', C.cyan, { bold: true }), span('  ' + clip(cur || '—', w - 30), C.text)]),
+    t([span(mdl.err ? '✖ ' + mdl.err : mdl.busy && !total ? 'leyendo el CPAM…' : `${total} modelos · ${mdl.at ? 'leído ' + ago(now() - mdl.at) : ''}`, mdl.err ? C.red : C.muted)]),
+    Box({
+      key: 'mdl-q-row',
+      flexDirection: 'row',
+      children: [
+        Box({
+          key: 'mdl-q-field',
+          flexGrow: 1,
+          borderStyle: 'round',
+          borderColor: C.violet,
+          paddingX: 1,
+          flexDirection: 'row',
+          children: [
+            t([span('⌕ ', C.violet, { bold: true })]),
+            Input({
+              key: 'mdl-q',
+              placeholder: 'filtrar: nan, opus, ag3…',
+              value: mdlQuery,
+              submitLabel: 'Enter',
+              onInput: (v: string) => {
+                mdlQuery = v
+                $.ui.invalidate('ui.render')
+              },
+              onSubmit: (v: string) => {
+                mdlQuery = v
+                $.ui.invalidate('ui.render')
+              },
+            }),
+          ],
+        }),
+      ],
+    }),
+    Box({
+      key: 'mdl-ctl',
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        chip('mdl-refresh', mdl.busy ? '◌ leyendo' : '↻ refrescar', true, C.tabBg, () => void refreshModels($, true)),
+        ...(mdlQuery ? [chip('mdl-clear', '✕ filtro', true, C.tabBg, () => ((mdlQuery = ''), $.ui.invalidate('ui.render')))] : []),
+        ...(mdlCpam ? [chip('mdl-back', '↩ volver a Anthropic', true, C.tabBg, () => void relaunchWith($, ''))] : []),
+      ],
+    }),
+  ]
+  if (mdlNote) head.push(t([span(mdlNote, mdlNote.startsWith('✓') ? C.lime : C.amber)]))
+  out.push(card('mdl-head', '◈ MODELOS · CPAM', C.purple, head))
+  if (mdlPick) {
+    const dim = mdlDim(mdlPick)
+    const rows: any[] = []
+    if (mdlSplit(mdlPick).prefix === 'wibond') rows.push(t([span('⚠ usa la cuenta de TRABAJO (Wibond)', C.red, { bold: true })]))
+    if (dim) rows.push(t([span(`⚠ ${dim === 'no chat' ? 'no es un modelo de chat' : 'antes falló en Claude Code: ' + dim}`, C.amber)]))
+    rows.push(
+      Box({
+        key: 'mdl-act',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: [
+          ...(mdlCpam ? [chip('mdl-here', '▶ usar acá (/model)', true, C.tabBg, () => void useHere($, mdlPick))] : []),
+          chip('mdl-reopen', mdlCpam ? '⟳ en tab nueva' : '⟳ reabrir esta sesión con este modelo', true, C.tabBg, () => void relaunchWith($, mdlPick)),
+          chip('mdl-cancel', '✕', true, C.chipDim, () => ((mdlPick = ''), $.ui.invalidate('ui.render'))),
+        ],
+      }),
+    )
+    out.push(card('mdl-pick', '▶ ' + clip(mdlPick, w - 6), mdlSplit(mdlPick).prefix === 'wibond' ? C.red : C.lime, rows))
+  }
+  for (const g of groups) {
+    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
+    out.push(
+      card('mdl-' + g.key, `${g.label}${g.prefix ? ' · ' + g.prefix + '/' : ''} (${g.models.length})`, color, [
+        Box({
+          key: 'mdl-list-' + g.key,
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          columnGap: 1,
+          children: g.models.map((id) => {
+            const on = id === cur
+            const off = !!mdlDim(id)
+            return Box({
+              key: 'mdlbox-' + id,
+              backgroundColor: mdlPick === id ? C.tabBg : undefined,
+              children: [Button({ key: 'mdl-' + id, label: (on ? '◆ ' : '') + mdlSplit(id).name + (MDL_BROKEN[id] ? ' ⚠' : ''), plain: true, dimColor: off && !on, onPress: () => ((mdlPick = id), (mdlNote = ''), $.ui.invalidate('ui.render')) })],
+            })
+          }),
+        }),
+      ]),
+    )
+  }
+  if (total && !groups.length) out.push(t([span(`nada coincide con "${mdlQuery}"`, C.dim)]))
+  out.push(t([span(mdlCpam ? '/model cambia acá; "volver a Anthropic" reabre en tab nueva (fork)' : 'sesión directa a Anthropic: el proveedor no cambia en vivo, se reabre en tab nueva (fork)', C.dim)], C.dim, { wrap: 'wrap' }))
+}
+
 function drawForge($: any, e: any, out: any[], h: any) {
   const { Box, Button, Input } = $.ui.resolve(e)
   const { t, span, card, chip, w } = h
@@ -3018,7 +3259,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | modelos | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -3027,6 +3268,7 @@ export function register(on: any) {
     if (tab === 'live') void refreshLive($)
     if (tab === 'forge') refreshForge($)
     if (tab === 'cortex') refreshCortex($)
+    if (tab === 'models') void refreshModels($)
     await readCortexLog($)
     $.clock.every(3000, () => {
       readCortexLog($)
@@ -3098,6 +3340,11 @@ export function register(on: any) {
         ytDraft = q
         void ytSearch($, q)
       } else await ytPoll($)
+    }
+    if (arg === 'modelos' || arg === 'models') {
+      tab = 'models'
+      await $.store.set('tab', tab).catch(() => undefined)
+      await refreshModels($, true)
     }
     if (arg === 'hw' || arg === 'vivo' || arg === 'live' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
       tab = arg === 'hw' ? 'hw' : arg === 'vivo' || arg === 'live' ? 'live' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'

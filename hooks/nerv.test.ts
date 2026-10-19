@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, missionNotify, missionWindow } from './register'
+import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -668,4 +668,96 @@ test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema, también en
   await m.unmount()
   const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, bodyColumns: 40, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } } })
   expect(JSON.stringify(await n.drawn())).toContain('g0n-img')
+})
+
+test('MODELOS: el prefijo del id del CPAM se separa del nombre', () => {
+  expect(mdlSplit('nan/qwen3.8-flash')).toEqual({ prefix: 'nan', name: 'qwen3.8-flash' })
+  expect(mdlSplit('ag3/gemini-3-flash')).toEqual({ prefix: 'ag3', name: 'gemini-3-flash' })
+  expect(mdlSplit('claude-opus-5-5')).toEqual({ prefix: '', name: 'claude-opus-5-5' })
+})
+
+test('MODELOS: agrupa por prefijo con etiqueta legible, NaN primero y Wibond al final', () => {
+  const ids = ['wibond/claude-opus-5-5', 'claude-sonnet-5', 'gpt-6-sol', 'ag2/gemini-3-flash', 'ag/gemini-3-flash', 'ag10/x', 'nan/gemma4', 'nan/deepseek-v4-flash', 'glm-5.2', 'codex-auto-review']
+  const g = mdlGroups(ids, { ag: 'gonn.nicolas@gmail.com', ag2: 'gnicolasrocca@gmail.com' })
+  expect(g.map((x) => x.label)).toEqual(['NaN', 'Claude', 'Codex/GPT', 'GLM', 'Google ag · gonn.nicolas', 'Google ag2 · gnicolasrocca', 'Google ag10', 'Wibond (trabajo)'])
+  expect(g[0]!.models).toEqual(['nan/deepseek-v4-flash', 'nan/gemma4'])
+  expect(g.find((x) => x.key === 'gpt')!.models).toEqual(['codex-auto-review', 'gpt-6-sol'])
+})
+
+test('MODELOS: el filtro busca en id y etiqueta y marca los rotos conocidos', () => {
+  const g = mdlGroups(['nan/gemma4', 'nan/qwen3.6', 'ag3/claude-sonnet-4-6', 'claude-opus-5-5'], { ag3: 'gonzalonicolas.dev@gmail.com' })
+  expect(mdlFilter(g, 'sonnet').map((x) => x.key)).toEqual(['ag3'])
+  expect(mdlFilter(g, 'gonzalonicolas').flatMap((x) => x.models)).toEqual(['ag3/claude-sonnet-4-6'])
+  expect(mdlFilter(g, '').length).toBe(g.length)
+  expect(mdlDim('nan/qwen3.6')).toBe('timeout')
+  expect(mdlDim('gpt-image-2')).toBe('no chat')
+  expect(mdlDim('nan/qwen3.8-flash')).toBe('')
+})
+
+test('MODELOS: el relanzado reanuda en fork por el CPAM sin la key, o vuelve a Anthropic', () => {
+  const sid = '0b7c1d2e-1111-2222-3333-444455556666'
+  const cpam = mdlLaunchCmd({ id: 'nan/qwen3.8-flash', sid, keyHelper: '/h/.local/bin/claude-go-key' })
+  expect(cpam).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8317')
+  expect(cpam).toContain(`--resume ${sid} --fork-session --model nan/qwen3.8-flash`)
+  expect(cpam).toContain('"apiKeyHelper":"/h/.local/bin/claude-go-key"')
+  const back = mdlLaunchCmd({ sid, keyHelper: '/h/k', configDir: '/h/.claude-secundaria' })
+  expect(back).toContain('env -u ANTHROPIC_BASE_URL')
+  expect(back).toContain('CLAUDE_CONFIG_DIR=/h/.claude-secundaria')
+  expect(back).not.toContain('--model')
+  expect(mdlLaunchCmd({ id: 'x; rm -rf ~', sid, keyHelper: '/h/k' })).toBe('')
+})
+
+test('MODELOS: la pestaña lista los grupos y elegir wibond avisa que es la cuenta de trabajo', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('process.run', async (_$: any, e: any) =>
+    e.argv[0] === 'sh' && e.argv[2].includes('/v1/models')
+      ? { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }, { id: 'wibond/claude-opus-5-5' }, { id: 'claude-sonnet-5' }] }), stderr: '' } }
+      : { value: { exitCode: 1, stdout: '', stderr: '' } },
+  )
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  let text = JSON.stringify(await m.drawn())
+  expect(text).toContain('◆ MODELOS')
+  expect(text).toContain('Wibond (trabajo)')
+  expect(text).toContain('qwen3.8-flash')
+  await m.press({ key: 'mdl-wibond/claude-opus-5-5' })
+  text = JSON.stringify(await m.drawn())
+  expect(text).toContain('cuenta de TRABAJO')
+  expect(text).toContain('reabrir esta sesión')
+})
+
+test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el default de settings.json', async ($, on) => {
+  mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' })
+  mock.store(on)
+  let settings = JSON.stringify({ effortLevel: 'high' }, null, 2) + '\n'
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.claude/settings.json' ? settings : '' }))
+  on('fs.write', async (_$: any, e: any) => {
+    if (e.path === '/h/.claude/settings.json') settings = e.text
+    return { value: undefined }
+  })
+  on('process.run', async (_$: any, e: any) =>
+    e.argv[0] === 'sh' ? { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } } : { value: { exitCode: 1, stdout: '', stderr: '' } },
+  )
+  const asked: string[] = []
+  on('command.run', { command: 'model' }, async (_$: any, e: any) => {
+    asked.push(e.args)
+    settings = JSON.stringify({ ...JSON.parse(settings), model: e.args }, null, 2) + '\n'
+    return { text: `Set model to ${e.args}` }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  expect(JSON.stringify(await m.drawn())).toContain('CPAM 8317')
+  await m.press({ key: 'mdl-nan/qwen3.8-flash' })
+  await m.press({ key: 'mdl-here' })
+  for (let i = 0; i < 20 && !asked.length; i++) await new Promise((r) => setTimeout(r, 10))
+  await new Promise((r) => setTimeout(r, 20))
+  expect(asked).toEqual(['nan/qwen3.8-flash'])
+  expect(JSON.parse(settings).model).toBeUndefined()
+  expect(JSON.parse(settings).effortLevel).toBe('high')
 })
