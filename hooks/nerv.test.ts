@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow } from './register'
+import { acctFor, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -760,4 +760,23 @@ test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el
   expect(asked).toEqual(['nan/qwen3.8-flash'])
   expect(JSON.parse(settings).model).toBeUndefined()
   expect(JSON.parse(settings).effortLevel).toBe('high')
+})
+
+test('CUENTA: personal directo, priv8 por el CPAM, y Wibond u otro prefijo sin menú', () => {
+  const h = '/h'
+  expect(acctFor({ configDir: '', home: h, cpam: false, model: 'claude-opus-5-5' })).toBe('personal')
+  expect(acctFor({ configDir: '/h/.claude', home: h, cpam: true, model: 'priv8/claude-opus-5-5' })).toBe('priv8')
+  expect(acctFor({ configDir: '', home: h, cpam: true, model: 'ag/claude-opus-5-5' })).toBe('')
+  expect(acctFor({ configDir: '/h/.claude-wibond', home: h, cpam: false, model: 'claude-opus-5-5' })).toBe('')
+  expect(acctFor({ configDir: '/h/.claude-wibond', home: h, cpam: true, model: 'priv8/claude-opus-5-5' })).toBe('')
+})
+
+test('CUENTA: priv8 usa el mismo Claude si lo tiene, si no el mismo tipo, si no el opus más nuevo', () => {
+  const ids = ['ag/claude-opus-5-5', 'priv8/claude-opus-4-7', 'priv8/claude-opus-5-5', 'priv8/claude-sonnet-4-6', 'priv8/claude-sonnet-5']
+  expect(priv8Pick(ids, 'claude-opus-5-5')).toBe('priv8/claude-opus-5-5')
+  expect(priv8Pick(ids, 'claude-opus-4-7[1m]')).toBe('priv8/claude-opus-4-7')
+  expect(priv8Pick(ids, 'sonnet')).toBe('priv8/claude-sonnet-5')
+  expect(priv8Pick(ids, 'claude-haiku-4-5')).toBe('priv8/claude-opus-5-5')
+  expect(priv8Pick(ids, '')).toBe('priv8/claude-opus-5-5')
+  expect(priv8Pick(['ag/claude-opus-5-5', 'nan/qwen3.6'], 'claude-opus-5-5')).toBe('')
 })

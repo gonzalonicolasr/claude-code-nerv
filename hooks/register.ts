@@ -99,7 +99,7 @@ let acctNote = ''
 const emails: Record<string, string> = {}
 const ACCOUNTS = [
   { id: 'personal', conf: '.claude.json', tag: 'PERSONAL' },
-  { id: 'dev', conf: '.claude-secundaria/.claude.json', tag: 'DEV' },
+  { id: 'priv8', conf: '', tag: 'CPAM' },
 ]
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
@@ -510,11 +510,29 @@ async function refreshPRs($: any) {
     }
 }
 
-const acctNow = () => (!configDir || configDir === `${home}/.claude` ? 'personal' : configDir === `${home}/.claude-secundaria` ? 'dev' : '')
-const acctName = (id: string) => (emails[id] || id).split('@')[0]
+// Cuenta de la sesión: personal = ~/.claude directo a Anthropic; priv8 = la misma config pero por
+// el CPAM con un modelo priv8/…. Otro config dir (Wibond) u otro prefijo del CPAM: sin menú.
+export const acctFor = (o: { configDir: string; home: string; cpam: boolean; model: string }) =>
+  o.configDir && o.configDir !== `${o.home}/.claude` ? '' : !o.cpam ? 'personal' : /^priv8\//.test(o.model) ? 'priv8' : ''
+// El modelo priv8/ al que se pasa: el mismo Claude de ahora si priv8 lo tiene, si no el mismo
+// tipo (opus/sonnet/haiku) más nuevo, si no el opus más nuevo. '' = el CPAM no expone priv8/.
+export const priv8Pick = (ids: readonly string[], model: string) => {
+  const mine = ids.filter((x) => /^priv8\/claude-/.test(x)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  const b = bare(model).replace(/\[.*\]$/, '')
+  const fam = /^(?:claude-)?(opus|sonnet|haiku|fable)\b/.exec(b)?.[1] || 'opus'
+  return mine.find((x) => x === 'priv8/' + b) || mine.find((x) => x.startsWith(`priv8/claude-${fam}-`)) || mine.find((x) => x.startsWith('priv8/claude-opus-')) || mine[0] || ''
+}
+const acctNow = () => acctFor({ configDir, home, cpam: mdlCpam, model })
+const acctName = (id: string) => (emails[id] || mdl.emails[id] || id).split('@')[0]
+const acctToggle = ($: any) => {
+  acctMenu = !acctMenu
+  acctNote = ''
+  if (acctMenu && !mdl.ids.length) void refreshModels($)
+  $.ui.invalidate('ui.render')
+}
 
 async function loadEmails($: any) {
-  for (const a of ACCOUNTS) {
+  for (const a of ACCOUNTS.filter((x) => x.conf)) {
     try {
       emails[a.id] = String(JSON.parse((await $.fs.read(`${home}/${a.conf}`).catch(() => '')) || '{}')?.oauthAccount?.emailAddress || '')
     } catch {}
@@ -522,18 +540,15 @@ async function loadEmails($: any) {
 }
 
 async function switchAccount($: any, id: string) {
-  acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : 'cambiando de cuenta…'
-  $.ui.invalidate('ui.render')
-  if (acctNote !== 'cambiando de cuenta…') return
-  const r = await $.process.run([`${home}/.local/bin/claude-cuenta`, id, sessionId, paneId], { timeoutMs: 10000 }).catch((err: any) => ({ exitCode: 1, stderr: String(err) }))
-  if (r?.exitCode !== 0) {
-    acctNote = clip(String(r?.stderr || 'no se pudo cambiar').trim(), 60)
-    $.ui.invalidate('ui.render')
-    return
+  // No reemplaza la sesión: abre una tab nueva de herdr que reanuda esta conversación (fork).
+  acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : ''
+  if (!acctNote && id === 'priv8' && !mdl.ids.length) await refreshModels($, true)
+  const target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
+  if (!acctNote && id === 'priv8' && !target) acctNote = mdl.ids.length ? 'el CPAM no expone priv8/ — falta el prefix' : mdl.err || 'el CPAM no respondió'
+  if (!acctNote) {
+    await relaunchWith($, target)
+    acctNote = mdlNote.startsWith('✓') ? `✓ ${acctName(id)} en tab nueva (fork de esta conversación)` : mdlNote
   }
-  await $.clock.sleep(20000).catch(() => undefined)
-  const log = String((await $.fs.read(`${home}/.local/state/claude-cuenta/${sessionId}.log`).catch(() => '')) || '').trim().split('\n').pop()
-  acctNote = clip(`no se pudo cambiar${log ? ': ' + log : ''}`, 70)
   $.ui.invalidate('ui.render')
 }
 
@@ -1208,7 +1223,7 @@ function draw($: any, e: any) {
         : t([span(name.padEnd(6), C.muted), span('┈'.repeat(gw), C.dim), span(typeof p === 'number' ? ` ${Math.round(p)}%`.padStart(5) : '   –', C.text)])
     const acctRows: any[] = []
     if (acctNow()) {
-      acctRows.push(kvBtn([span('CUENTA ', C.muted), span(clip(acctName(acctNow()), w - 18), C.text, { bold: true })], Button({ key: 'acct-menu', label: acctMenu ? '▴' : 'cambiar ▾', plain: true, dimColor: !acctMenu, onPress: () => ((acctMenu = !acctMenu), (acctNote = ''), $.ui.invalidate('ui.render')) })))
+      acctRows.push(kvBtn([span('CUENTA ', C.muted), span(clip(acctName(acctNow()), w - 18), C.text, { bold: true })], Button({ key: 'acct-menu', label: acctMenu ? '▴' : 'cambiar ▾', plain: true, dimColor: !acctMenu, onPress: () => acctToggle($) })))
       if (acctMenu)
         for (const a of ACCOUNTS.filter((x) => x.id !== acctNow()))
           acctRows.push(Box({ key: 'acct-' + a.id, flexDirection: 'row', children: [t([span('  → ', C.dim)]), Button({ key: 'acct-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) })] }))
@@ -3244,6 +3259,8 @@ export function register(on: any) {
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
     configDir = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '')
+    mdlCpam = /:8317\b/.test(String((await $.env.get('ANTHROPIC_BASE_URL').catch(() => '')) || ''))
+    if (mdlCpam) void refreshModels($)
     cxLog.path = String((await $.env.get('CORTEX_RECALL_EVENTS').catch(() => '')) || (home ? `${home}/.cache/cortex-recall/events.jsonl` : ''))
     await refreshTasks($)
     await loadEmails($)
@@ -3626,7 +3643,7 @@ export function register(on: any) {
       if (patternBlue) bits.push(Text({ color: C.orange, children: [' · ◆ PATTERN BLUE'] }))
       bits.push(Text({ color: C.dim, children: [' · /nerv'] }))
       const top: any[] = [Text({ wrap: 'truncate', children: bits })]
-      if (acctNow()) top.push(Text({ color: C.dim, children: [' · '] }), Button({ key: 'band-acct', label: `${acctName(acctNow())} ${acctMenu ? '▴' : '▾'}`, plain: true, onPress: () => ((acctMenu = !acctMenu), (acctNote = ''), $.ui.invalidate('ui.render')) }))
+      if (acctNow()) top.push(Text({ color: C.dim, children: [' · '] }), Button({ key: 'band-acct', label: `${acctName(acctNow())} ${acctMenu ? '▴' : '▾'}`, plain: true, onPress: () => acctToggle($) }))
       const rows: any[] = [Box({ key: 'band-top', flexDirection: 'row', children: top })]
       if (acctNow() && acctMenu) {
         const opts: any[] = [Text({ color: C.dim, children: ['  cambiar a → '] })]

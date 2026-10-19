@@ -18,6 +18,9 @@ abiertas y lo que pliegues queda guardado).
   - **Sincronización:** modelo, contexto (SYNC), cuota de 5 h y 7 días, y costo de la sesión. Con
     el contexto o la cuota arriba del 85 % pasa a **BATERÍA INTERNA**: se pone roja y estima cuánto
     tiempo te queda al ritmo actual.
+    En **CUENTA → cambiar ▾** pasás la conversación entre tu cuenta personal (directo a Anthropic)
+    y **priv8** (la cuenta del CPAM con prefijo `priv8`): abre una tab nueva de herdr que la
+    reanuda en fork, con el mismo Claude si priv8 lo tiene. También `/nerv cuenta <personal|priv8>`.
   - **Actividad:** qué herramienta está corriendo y hace cuánto, archivos editados **sin verificar**
     y **PATTERN BLUE** cuando el mismo error se repite tres veces.
   - **Tareas:** comandos y subagentes en segundo plano, con su estado.
