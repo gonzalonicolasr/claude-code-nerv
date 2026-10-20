@@ -2815,7 +2815,10 @@ async function relaunchWith($: any, id: string) {
   // El id se relee al click: tras /clear o /resume la conversación ya no es la del arranque.
   sessionId = (await $.session.id().catch(() => '')) || sessionId
   const base = configDir || `${home}/.claude`
-  const hasTranscript = !!sessionId && !!cwdNow && !!(await $.fs.stat(transcriptPath(base, cwdNow, sessionId)).catch(() => undefined))
+  // --resume exige al menos un mensaje del usuario: una sesión recién abierta ya tiene el
+  // .jsonl (hooks de arranque) pero "No conversation found".
+  const hasTranscript = !!sessionId && !!cwdNow &&
+    (await $.process.run(['grep', '-qm1', '"type":"user"', transcriptPath(base, cwdNow, sessionId)], { timeoutMs: 5000 }).catch(() => undefined))?.exitCode === 0
   const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
   mdlNote = !wsId || !paneId ? 'sólo se puede dentro de herdr' : !cmd || !cwdNow ? 'no sé el id o la carpeta de esta sesión' : 'abriendo tab nueva…'
   $.ui.invalidate('ui.render')
