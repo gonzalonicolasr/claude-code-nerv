@@ -2740,14 +2740,29 @@ export const mdlFilter = (groups: readonly MdlGroup[], q: string): MdlGroup[] =>
 // El comando que se tipea en la tab nueva de herdr: reanuda esta conversación (fork, así no
 // pisa el transcript de la sesión que sigue abierta) por el CPAM con `id`, o sin `id` vuelve
 // directo a Anthropic. La api-key nunca va acá: la lee el apiKeyHelper en runtime.
-export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; configDir?: string }) => {
+// Contexto de los modelos openai-compatibility del config.yaml del CPAM: "prefix/name" -> tokens.
+// Sólo lee `prefix:` y las filas `{ name: ..., max-context-length: N }` (nunca las api-keys).
+export const cpamContexts = (yaml: string) => {
+  const out: Record<string, number> = {}
+  let prefix = ''
+  for (const line of yaml.split('\n')) {
+    const p = line.match(/^\s*prefix:\s*"?([\w.-]+)"?\s*$/)
+    if (p) prefix = p[1]
+    const m = line.match(/name:\s*"?([\w.:-]+)"?.*max-context-length:\s*(\d+)/)
+    if (m) out[prefix ? `${prefix}/${m[1]}` : m[1]] = Number(m[2])
+  }
+  return out
+}
+export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; configDir?: string; ctx?: number }) => {
   const safe = (s: string) => /^[\w.@:/+-]+$/.test(s)
   if ((o.sid && !safe(o.sid)) || !safe(o.keyHelper) || (o.id && !safe(o.id)) || (o.configDir && !safe(o.configDir))) return ''
   const cfg = o.configDir ? ` CLAUDE_CONFIG_DIR=${o.configDir}` : ''
   // Sin sid (la conversación todavía no tiene transcript): sesión nueva con ese modelo.
   const resume = o.sid ? ` --resume ${o.sid} --fork-session` : ''
   if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${cfg} claude${resume}`
-  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}'${resume} --model ${o.id}`
+  // Claude Code asume 200k para un id que no conoce: se le declara el contexto real.
+  const ctx = o.ctx && Number.isInteger(o.ctx) && o.ctx > 0 ? ` CLAUDE_CODE_MAX_CONTEXT_TOKENS=${o.ctx}` : ''
+  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg}${ctx} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}'${resume} --model ${o.id}`
 }
 // Dónde guarda Claude Code el transcript: projects/<cwd con todo lo no alfanumérico -> '-'>/<sid>.jsonl
 export const transcriptPath = (base: string, cwd: string, sid: string) => `${base}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sid}.jsonl`
@@ -2819,7 +2834,8 @@ async function relaunchWith($: any, id: string) {
   // .jsonl (hooks de arranque) pero "No conversation found".
   const hasTranscript = !!sessionId && !!cwdNow &&
     (await $.process.run(['grep', '-qm1', '"type":"user"', transcriptPath(base, cwdNow, sessionId)], { timeoutMs: 5000 }).catch(() => undefined))?.exitCode === 0
-  const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
+  const ctx = id ? cpamContexts((await $.fs.read(`${home}/.cli-proxy-api/config.yaml`).catch(() => '')) || '')[id] : undefined
+  const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, ctx, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
   mdlNote = !wsId || !paneId ? 'sólo se puede dentro de herdr' : !cmd || !cwdNow ? 'no sé el id o la carpeta de esta sesión' : 'abriendo tab nueva…'
   $.ui.invalidate('ui.render')
   if (mdlNote !== 'abriendo tab nueva…') return

@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath } from './register'
+import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -709,6 +709,9 @@ test('MODELOS: el relanzado reanuda en fork por el CPAM sin la key, o vuelve a A
   const fresh = mdlLaunchCmd({ id: 'nan/deepseek-v4-flash', keyHelper: '/h/k' })
   expect(fresh).not.toContain('--resume')
   expect(fresh).toContain('--model nan/deepseek-v4-flash')
+  expect(mdlLaunchCmd({ id: 'nan/deepseek-v4-flash', keyHelper: '/h/k', ctx: 1048576 })).toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576 ANTHROPIC_BASE_URL=')
+  const yaml = 'openai-compatibility:\n  - name: "nan"\n    prefix: "nan"\n    api-key-entries:\n      - api-key: "sk-x"\n    models:\n      - { name: "deepseek-v4-flash", alias: "deepseek-v4-flash", max-context-length: 1048576 }\n      - { name: "gemma4", alias: "gemma4", max-context-length: 262144 }\n'
+  expect(cpamContexts(yaml)).toEqual({ 'nan/deepseek-v4-flash': 1048576, 'nan/gemma4': 262144 })
   expect(transcriptPath('/home/gonza/.claude', '/home/gonza/projects/my.app', sid)).toBe(`/home/gonza/.claude/projects/-home-gonza-projects-my-app/${sid}.jsonl`)
 })
 
