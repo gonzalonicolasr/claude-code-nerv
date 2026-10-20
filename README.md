@@ -110,3 +110,11 @@ claude plugin test .
 
 Mientras lo usás con `--plugin-dir`, Claude Code lo recarga solo cada vez que guardás
 `hooks/register.ts`.
+
+## Pendientes
+
+- **Cambiar de modelo sin abrir otra tab.** Hoy "reabrir con este modelo" abre una tab
+  nueva de herdr con un fork de la conversación. Lo que se quiere es cambiar y refrescar en
+  el mismo lugar. Una forma posible: cerrar este Claude (`/exit`) y correr el comando en el
+  mismo pane (`herdr pane run $HERDR_PANE_ID …`). Hay que confirmar que el `/exit` llegue
+  antes que el comando y que el pane no se cierre al salir Claude. (pedido 2026-10-20)
