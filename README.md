@@ -47,6 +47,14 @@ Además, el spinner de "pensando" se reemplaza por un escáner animado con verbo
 ("Sincronizando", "Consultando a MAGI"…) y el `SYNC` de contexto. Cuando un comando que fallaba
 pasa, sale un confeti. En los turnos de más de 3 minutos llega una notificación **MISSION COMPLETE**.
 
+Debajo del prompt, bajo la línea de Claude Code (`auto mode on`, `esc to interrupt`), va una
+**línea NERV** fija: `ネルフ ⟋ ◆ cuenta CPAM|ANTHROPIC ⟋ modelo ⟋ SYNC ▰▰▱▱▱ usado/total % ⟋ EFFORT
+⟋ ⎇ rama ●cambios ⟋ 5H % ⟋ $costo`. Por el CPAM la cuenta sale del prefijo del modelo (`ag3/`,
+`nan/`, `priv8/`…) y su email; directo, del `CLAUDE_CONFIG_DIR` (`personal` para `~/.claude`). La
+cuenta de Wibond va en ámbar con ⚠. La ventana de contexto es `CLAUDE_CODE_MAX_CONTEXT_TOKENS` si
+está, si no la que reporta la sesión. En una terminal angosta se caen primero costo, 5H, rama y
+effort.
+
 ## Requisitos
 
 - Claude Code **2.1.287** o más nuevo, con `"tui": "fullscreen"` en tus settings. Como barra

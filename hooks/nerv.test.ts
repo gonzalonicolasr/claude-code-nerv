@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts } from './register'
+import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -796,4 +796,58 @@ test('CPAM: la firma cambia al sumar un prefix o tocar el config.yaml, no por el
   expect(cpamSig([a[0]!, { name: 'claude-b.json', prefix: 'priv8' }], conf)).not.toBe(cpamSig(a, conf))
   expect(cpamSig(a, { mtimeMs: 2, size: 10 })).not.toBe(cpamSig(a, conf))
   expect(cpamSig(a)).toBe('claude-a.json=ag,claude-b.json=|0:0')
+})
+
+test('línea bajo el prompt: la cuenta sale del prefijo del modelo por el CPAM y del config dir directo', () => {
+  const emails = { ag3: 'gon.ag3@example.com', wibond: 'x@wibond.test' }
+  const base = { cpam: true, configDir: '', home: '/h', emails }
+  expect(acctBadge({ ...base, model: 'ag3/claude-opus-5-5' })).toEqual({ who: 'ag3·gon.ag3', tag: 'CPAM', warn: false })
+  expect(acctBadge({ ...base, model: 'wibond/claude-sonnet-4-6' })).toEqual({ who: 'wibond·x', tag: 'CPAM', warn: true })
+  expect(acctBadge({ ...base, model: 'nan/glm-5' }).who).toBe('nan')
+  expect(acctBadge({ ...base, model: 'claude-opus-5-5' }).who).toBe('default')
+  const direct = { cpam: false, home: '/h', emails, model: 'claude-opus-5-5' }
+  expect(acctBadge({ ...direct, configDir: '' })).toEqual({ who: 'personal', tag: 'ANTHROPIC', warn: false })
+  expect(acctBadge({ ...direct, configDir: '/h/.claude/' }).who).toBe('personal')
+  expect(acctBadge({ ...direct, configDir: '/h/.claude-wibond', directEmail: 'x@wibond.test' })).toEqual({ who: 'wibond·x', tag: 'ANTHROPIC', warn: true })
+})
+
+test('línea bajo el prompt: ventana de contexto, barra y umbrales', () => {
+  expect(ctxTotal({ env: '1000000', window: 200000 })).toBe(1000000)
+  expect(ctxTotal({ env: '', window: 200000, cpam: 400000 })).toBe(200000)
+  expect(ctxTotal({ cpam: 400000 })).toBe(400000)
+  expect(ctxTotal({})).toBe(200000)
+  expect(kfmt(84321)).toBe('84K')
+  expect(kfmt(1200000)).toBe('1.2M')
+  expect(kfmt(1000000)).toBe('1M')
+  expect(ctxGauge(undefined, 200000)).toEqual({ bar: '▱▱▱▱▱', pct: undefined, level: 'idle', text: '–/200K' })
+  expect(ctxGauge(40000, 200000)).toEqual({ bar: '▰▱▱▱▱', pct: 20, level: 'ok', text: '40K/200K 20%' })
+  expect(ctxGauge(130000, 200000).level).toBe('warn')
+  expect(ctxGauge(170000, 200000)).toEqual({ bar: '▰▰▰▰▰', pct: 85, level: 'hot', text: '170K/200K 85%' })
+  expect(shortModel('claude-opus-5-5')).toBe('OPUS 5.5')
+  expect(shortModel('ag3/claude-sonnet-4-5-20250929[1m]')).toBe('SONNET 4.5 [1M]')
+  expect(shortModel('nan/glm-5')).toBe('glm-5')
+})
+
+test('línea bajo el prompt: en terminal angosta se caen primero los de menor prioridad', () => {
+  expect(cellWidth('ネルフ')).toBe(6)
+  const segs = [
+    { id: 'nerv', prio: 9, parts: [['ネルフ', '#fff']] as [string, string][] },
+    { id: 'acct', prio: 8, parts: [['◆ personal ANTHROPIC', '#fff']] as [string, string][] },
+    { id: 'git', prio: 3, parts: [['⎇ main', '#fff']] as [string, string][] },
+    { id: 'cost', prio: 1, parts: [['$1.23', '#fff']] as [string, string][] },
+  ]
+  expect(fitSegs(segs, 200).map((s) => s.id)).toEqual(['nerv', 'acct', 'git', 'cost'])
+  expect(fitSegs(segs, 40).map((s) => s.id)).toEqual(['nerv', 'acct', 'git'])
+  expect(fitSegs(segs, 30).map((s) => s.id)).toEqual(['nerv', 'acct'])
+  expect(fitSegs(segs, 5).map((s) => s.id)).toEqual(['nerv'])
+})
+
+test('la línea NERV se dibuja bajo el hint del prompt y conserva la línea del engine', async ($, on) => {
+  on('ui.render', { component: 'PromptHint' }, (_$: any, e: any) => _$.ui.resolve(e).Text({ children: [String(e.props.hint)] }))
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: true, hint: 'esc to interrupt' } })
+  const text = JSON.stringify(await m.drawn())
+  expect(text).toContain('esc to interrupt')
+  expect(text).toContain('ネルフ')
+  expect(text).toContain('ANTHROPIC')
+  expect(text).toContain('SYNC')
 })

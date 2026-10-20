@@ -624,6 +624,8 @@ async function refreshLocal($: any) {
       health = { ok: false, when, text: falla.replace(/^- /, '') }
     }
   }
+  // la línea bajo el prompt sólo se redibuja si alguien lo pide (rama, modelo, git)
+  $.ui.invalidate('ui.render')
 }
 
 async function refreshHw($: any) {
@@ -2767,12 +2769,98 @@ export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; 
 // Dónde guarda Claude Code el transcript: projects/<cwd con todo lo no alfanumérico -> '-'>/<sid>.jsonl
 export const transcriptPath = (base: string, cwd: string, sid: string) => `${base}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sid}.jsonl`
 
+// ── Línea NERV bajo el prompt: cuenta, modelo, contexto y datos de un vistazo ──
+// Cuenta de la sesión. Por el CPAM: el prefijo del modelo (ag3/, wibond/, nan/, priv8/…) y su
+// email (de los json de auth del CPAM). Directa: el config dir de Claude Code (personal = ~/.claude).
+export const acctBadge = (o: { model: string; cpam: boolean; configDir: string; home: string; emails: Record<string, string>; directEmail?: string }) => {
+  const local = (m?: string) => clip(String(m || '').split('@')[0], 14)
+  if (o.cpam) {
+    const prefix = /^([\w.-]+)\//.exec(o.model || '')?.[1] || ''
+    const email = prefix ? o.emails[prefix] || '' : ''
+    const who = prefix ? (email ? `${prefix}·${local(email)}` : prefix) : 'default'
+    return { who, tag: 'CPAM' as const, warn: /wibond/i.test(prefix + ' ' + email) }
+  }
+  const dir = (o.configDir || '').replace(/\/+$/, '')
+  const name = !dir || dir === `${o.home}/.claude` ? 'personal' : dir.split('/').pop()!.replace(/^\.?claude-?/i, '').toLowerCase() || 'personal'
+  const who = o.directEmail ? `${name}·${local(o.directEmail)}` : name
+  return { who, tag: 'ANTHROPIC' as const, warn: /wibond/i.test(name + ' ' + (o.directEmail || '')) }
+}
+// Ventana de contexto: CLAUDE_CODE_MAX_CONTEXT_TOKENS si está, si no la que reporta la sesión,
+// si no la del config del CPAM, si no 200k.
+export const ctxTotal = (o: { env?: string; window?: number; cpam?: number }) => {
+  const env = Number(o.env)
+  if (Number.isInteger(env) && env > 0) return env
+  if (o.window && o.window > 0) return o.window
+  if (o.cpam && o.cpam > 0) return o.cpam
+  return 200000
+}
+export const kfmt = (n: number) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(Math.round(n)))
+// ▰▰▰▱▱ + umbrales: ok < 60%, warn < 85%, hot desde 85% (donde arranca el auto-compact).
+export const ctxGauge = (tokens: number | undefined, total: number, cells = 5) => {
+  if (tokens === undefined || !(total > 0)) return { bar: '▱'.repeat(cells), pct: undefined as number | undefined, level: 'idle' as const, text: `–/${kfmt(total)}` }
+  const pct = Math.max(0, Math.min(100, Math.round((tokens / total) * 100)))
+  const on = Math.min(cells, Math.ceil((pct / 100) * cells))
+  const level = pct >= 85 ? ('hot' as const) : pct >= 60 ? ('warn' as const) : ('ok' as const)
+  return { bar: '▰'.repeat(on) + '▱'.repeat(cells - on), pct, level, text: `${kfmt(tokens)}/${kfmt(total)} ${pct}%` }
+}
+// claude-opus-5-5[1m] → OPUS 5.5 [1M]; un id de otro proveedor queda como está (sin el prefijo).
+export const shortModel = (id: string) => {
+  const b = String(id || '').replace(/^[^/]+\//, '')
+  const ctx = /\[(\w+)\]$/.exec(b)?.[1]
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(b.replace(/\[.*\]$/, ''))
+  const name = m ? `${m[1].toUpperCase()} ${m[2]}${m[3] ? '.' + m[3] : ''}` : b.replace(/\[.*\]$/, '') || '—'
+  return ctx ? `${name} [${ctx.toUpperCase()}]` : name
+}
+// Ancho en celdas: katakana/kanji/fullwidth ocupan 2.
+export const cellWidth = (s: string) => {
+  let w = 0
+  for (const ch of s) w += /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 2 : 1
+  return w
+}
+export type StatusSeg = { id: string; prio: number; parts: [string, string, boolean?][] }
+export const STATUS_SEP = ' ⟋ '
+// Entra en `cols`: se descartan primero los de menor prioridad, el orden se mantiene.
+export const fitSegs = (segs: readonly StatusSeg[], cols: number) => {
+  const w = (s: StatusSeg) => s.parts.reduce((n, p) => n + cellWidth(p[0]), 0)
+  const kept = [...segs]
+  const total = () => kept.reduce((n, s) => n + w(s), 0) + Math.max(0, kept.length - 1) * cellWidth(STATUS_SEP)
+  while (kept.length > 1 && total() > cols) {
+    const low = kept.reduce((a, b) => (b.prio < a.prio ? b : a))
+    kept.splice(kept.indexOf(low), 1)
+  }
+  return kept
+}
+
 let mdl: { ids: string[]; emails: Record<string, string>; at: number; err: string; busy: boolean } = { ids: [], emails: {}, at: 0, err: '', busy: false }
 let mdlCpam = false
 let mdlQuery = ''
 let mdlPick = ''
 let mdlNote = ''
 let mdlSig = ''
+let directEmail = ''
+let ctxEnv = ''
+let cpamCtx: Record<string, number> = {}
+
+// Los segmentos de la línea bajo el prompt, en orden; `prio` alto = se queda en terminales angostas.
+const statusSegs = (): StatusSeg[] => {
+  const a = acctBadge({ model, cpam: mdlCpam, configDir, home, emails: mdl.emails, directEmail })
+  const ctx = ctxGauge(usage?.context?.tokens, ctxTotal({ env: ctxEnv, window: usage?.context?.window, cpam: cpamCtx[model] }))
+  const hue = ctx.level === 'hot' ? C.red : ctx.level === 'warn' ? C.amber : ctx.level === 'ok' ? C.lime : C.dim
+  const segs: StatusSeg[] = [
+    { id: 'nerv', prio: 9, parts: [['ネルフ', C.purple, true]] },
+    { id: 'acct', prio: 8, parts: [['◆ ', C.violet], [(a.warn ? '⚠ ' : '') + a.who, a.warn ? C.amber : C.text, a.warn], [' ' + a.tag, a.tag === 'CPAM' ? C.lime : C.cyan, true]] },
+    { id: 'model', prio: 6, parts: [[shortModel(model), C.text, true]] },
+    { id: 'ctx', prio: 7, parts: [['SYNC ', C.muted], [ctx.bar + ' ', hue], [ctx.text, hue]] },
+  ]
+  const lvl = effortLevel()
+  if (lvl) segs.push({ id: 'effort', prio: 4, parts: [['EFFORT ', C.muted], [effortName(), hex(EFFORTS[lvl - 1].hue)]] })
+  if (branch) segs.push({ id: 'git', prio: 3, parts: [['⎇ ' + clip(branch, 24), C.cyan], ...(gitInfo.dirty ? [[` ●${gitInfo.dirty}`, C.amber] as [string, string]] : [])] })
+  const five = pct('five_hour')
+  if (typeof five === 'number') segs.push({ id: 'five', prio: 2, parts: [['5H ', C.muted], [`${Math.round(five)}%`, heat(five)]] })
+  const usd = usage?.cost?.usd
+  if (typeof usd === 'number' && usd > 0) segs.push({ id: 'cost', prio: 1, parts: [[`$${usd.toFixed(2)}`, C.muted]] })
+  return segs
+}
 
 // Firma de las cuentas del CPAM: json de auth + su prefix, y mtime/size del config.yaml (nunca tokens).
 export const cpamSig = (auth: readonly { name: string; prefix?: string }[], conf?: { mtimeMs?: number; size?: number }) =>
@@ -3312,6 +3400,13 @@ export function register(on: any) {
     configDir = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '')
     mdlCpam = /:8317\b/.test(String((await $.env.get('ANTHROPIC_BASE_URL').catch(() => '')) || ''))
     if (mdlCpam) void refreshModels($)
+    ctxEnv = String((await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS').catch(() => '')) || '')
+    if (home) {
+      try {
+        directEmail = String(JSON.parse((await $.fs.read(`${configDir || home}/.claude.json`).catch(() => '')) || '{}')?.oauthAccount?.emailAddress || '')
+      } catch {}
+      if (mdlCpam) cpamCtx = cpamContexts((await $.fs.read(`${home}/.cli-proxy-api/config.yaml`).catch(() => '')) || '')
+    }
     cxLog.path = String((await $.env.get('CORTEX_RECALL_EVENTS').catch(() => '')) || (home ? `${home}/.cache/cortex-recall/events.jsonl` : ''))
     await refreshTasks($)
     await loadEmails($)
@@ -3674,6 +3769,24 @@ export function register(on: any) {
     if (quiet || !m || e.surface !== 'terminal') return next(e)
     const { Text } = $.ui.resolve(e)
     return Text({ wrap: 'truncate', color: C.dim, children: [`↻ ${m[1]} recargado`] })
+  })
+
+  // La línea NERV bajo el prompt: la del engine (modo, esc to interrupt, sus pills) queda arriba intacta.
+  on('ui.render', { component: 'PromptHint' }, async ($: any, e: any, next: any) => {
+    const rest = await next(e)
+    if (quiet || e.surface !== 'terminal') return rest
+    try {
+      const { Box, Text } = $.ui.resolve(e)
+      const kept = fitSegs(statusSegs(), Math.max(10, (e.viewport?.columns || 100) - 2))
+      const parts: any[] = []
+      kept.forEach((sg, i) => {
+        if (i) parts.push(Text({ color: C.dim, children: [STATUS_SEP] }))
+        for (const [text, color, bold] of sg.parts) parts.push(Text({ color, bold: !!bold, children: [text] }))
+      })
+      return Box({ flexDirection: 'column', children: [rest, Box({ key: 'nerv-status', children: [Text({ wrap: 'truncate', children: parts })] })] })
+    } catch {
+      return rest
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any, next: any) => {
