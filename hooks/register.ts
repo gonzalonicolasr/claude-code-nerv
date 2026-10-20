@@ -2740,13 +2740,17 @@ export const mdlFilter = (groups: readonly MdlGroup[], q: string): MdlGroup[] =>
 // El comando que se tipea en la tab nueva de herdr: reanuda esta conversación (fork, así no
 // pisa el transcript de la sesión que sigue abierta) por el CPAM con `id`, o sin `id` vuelve
 // directo a Anthropic. La api-key nunca va acá: la lee el apiKeyHelper en runtime.
-export const mdlLaunchCmd = (o: { id?: string; sid: string; keyHelper: string; configDir?: string }) => {
+export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; configDir?: string }) => {
   const safe = (s: string) => /^[\w.@:/+-]+$/.test(s)
-  if (!safe(o.sid) || !safe(o.keyHelper) || (o.id && !safe(o.id)) || (o.configDir && !safe(o.configDir))) return ''
+  if ((o.sid && !safe(o.sid)) || !safe(o.keyHelper) || (o.id && !safe(o.id)) || (o.configDir && !safe(o.configDir))) return ''
   const cfg = o.configDir ? ` CLAUDE_CONFIG_DIR=${o.configDir}` : ''
-  if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${cfg} claude --resume ${o.sid} --fork-session`
-  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}' --resume ${o.sid} --fork-session --model ${o.id}`
+  // Sin sid (la conversación todavía no tiene transcript): sesión nueva con ese modelo.
+  const resume = o.sid ? ` --resume ${o.sid} --fork-session` : ''
+  if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${cfg} claude${resume}`
+  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}'${resume} --model ${o.id}`
 }
+// Dónde guarda Claude Code el transcript: projects/<cwd con todo lo no alfanumérico -> '-'>/<sid>.jsonl
+export const transcriptPath = (base: string, cwd: string, sid: string) => `${base}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sid}.jsonl`
 
 let mdl: { ids: string[]; emails: Record<string, string>; at: number; err: string; busy: boolean } = { ids: [], emails: {}, at: 0, err: '', busy: false }
 let mdlCpam = false
@@ -2808,7 +2812,11 @@ async function refreshModels($: any, force = false) {
 
 async function relaunchWith($: any, id: string) {
   const wsId = String((await $.env.get('HERDR_WORKSPACE_ID').catch(() => '')) || '')
-  const cmd = mdlLaunchCmd({ id: id || undefined, sid: sessionId, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
+  // El id se relee al click: tras /clear o /resume la conversación ya no es la del arranque.
+  sessionId = (await $.session.id().catch(() => '')) || sessionId
+  const base = configDir || `${home}/.claude`
+  const hasTranscript = !!sessionId && !!cwdNow && !!(await $.fs.stat(transcriptPath(base, cwdNow, sessionId)).catch(() => undefined))
+  const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
   mdlNote = !wsId || !paneId ? 'sólo se puede dentro de herdr' : !cmd || !cwdNow ? 'no sé el id o la carpeta de esta sesión' : 'abriendo tab nueva…'
   $.ui.invalidate('ui.render')
   if (mdlNote !== 'abriendo tab nueva…') return
@@ -2816,7 +2824,7 @@ async function relaunchWith($: any, id: string) {
   const r = await herdrJson($, ['tab', 'create', '--workspace', wsId, '--cwd', cwdNow, '--label', label, '--focus'])
   const pane = String(r?.root_pane?.pane_id || '')
   const ran = pane ? await $.process.run(['herdr', 'pane', 'run', pane, cmd], { timeoutMs: 5000 }).catch(() => undefined) : undefined
-  mdlNote = ran?.exitCode === 0 ? `✓ tab "${label}" abierta (fork de esta conversación)` : 'herdr no pudo abrir la tab'
+  mdlNote = ran?.exitCode !== 0 ? 'herdr no pudo abrir la tab' : hasTranscript ? `✓ tab "${label}" abierta (fork de esta conversación)` : `✓ tab "${label}" abierta (sesión nueva: esta todavía no tiene historial)`
   mdlPick = ''
   $.ui.invalidate('ui.render')
 }

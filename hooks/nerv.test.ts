@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick } from './register'
+import { acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -705,6 +705,11 @@ test('MODELOS: el relanzado reanuda en fork por el CPAM sin la key, o vuelve a A
   expect(back).toContain('CLAUDE_CONFIG_DIR=/h/.claude-secundaria')
   expect(back).not.toContain('--model')
   expect(mdlLaunchCmd({ id: 'x; rm -rf ~', sid, keyHelper: '/h/k' })).toBe('')
+  // Conversación sin transcript todavía: sesión nueva con el modelo, sin --resume.
+  const fresh = mdlLaunchCmd({ id: 'nan/deepseek-v4-flash', keyHelper: '/h/k' })
+  expect(fresh).not.toContain('--resume')
+  expect(fresh).toContain('--model nan/deepseek-v4-flash')
+  expect(transcriptPath('/home/gonza/.claude', '/home/gonza/projects/my.app', sid)).toBe(`/home/gonza/.claude/projects/-home-gonza-projects-my-app/${sid}.jsonl`)
 })
 
 test('MODELOS: la pestaña lista los grupos y elegir wibond avisa que es la cuenta de trabajo', async ($, on) => {
