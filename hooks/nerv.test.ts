@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveDcList, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -504,8 +504,8 @@ test('EN VIVO muestra GO LIVE, el chat y las dos cámaras, sin micrófono ni EFF
   await $.command.run({ command: 'nerv', args: 'vivo' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows: 200, contentRows: 200 } } })
   const drawn = JSON.stringify(await m.drawn())
-  for (const x of ['EN VIVO', 'STREAMCAM · en vivo', '30 fps', 'cpu 13%', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%', 'GO LIVE · 9 mirándote', 'general', 'asuka, shinji +7 más', '12 en el canal', 'CHAT DEL CANAL', 'hola desde el canal', 'buenas']) expect(drawn).toContain(x)
-  for (const x of ['gon (vos)', 'mudo', 'g0n-img', 'SILENCIADO', 'AL AIRE', 'live-mic', 'effort-foot', 'EFFORT']) expect(drawn).not.toContain(x)
+  for (const x of ['EN VIVO', 'STREAMCAM · en vivo', '30 fps', 'cpu 13%', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%', 'GO LIVE · 9 mirándote', 'asuka, shinji +7 más', 'CHAT DEL CANAL', 'hola desde el canal', 'buenas']) expect(drawn).toContain(x)
+  for (const x of ['gon (vos)', 'rei', 'mudo', 'en el canal', 'NERV HQ', 'DISCORD', 'g0n-img', 'SILENCIADO', 'AL AIRE', 'live-mic', 'effort-foot', 'EFFORT']) expect(drawn).not.toContain(x)
   expect(drawn.indexOf('GO LIVE')).toBeLessThan(drawn.indexOf('CHAT DEL CANAL'))
   expect(drawn.indexOf('CHAT DEL CANAL')).toBeLessThan(drawn.indexOf('STREAMCAM'))
   expect(drawn.indexOf('hola desde el canal')).toBeLessThan(drawn.indexOf('buenas'))
@@ -641,7 +641,7 @@ test('la tarjeta de Discord dice falta Vencord sin el archivo y entiende el cana
   expect(d.live).toBe(false)
 })
 
-test('EN VIVO sin nerv-discord.json avisa que falta Vencord', async ($, on) => {
+test('EN VIVO sin nerv-discord.json no muestra nada de Discord, sólo las cámaras', async ($, on) => {
   mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
   mock.store(on)
   on('process.run', async (_$: any, e: any) => {
@@ -652,7 +652,9 @@ test('EN VIVO sin nerv-discord.json avisa que falta Vencord', async ($, on) => {
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
   await $.command.run({ command: 'nerv', args: 'vivo' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
-  expect(JSON.stringify(await m.drawn())).toContain('falta Vencord')
+  const drawn = JSON.stringify(await m.drawn())
+  for (const x of ['STREAMCAM', 'IPHONE']) expect(drawn).toContain(x)
+  for (const x of ['falta Vencord', 'DISCORD', 'live-dc', 'CHAT DEL CANAL']) expect(drawn).not.toContain(x)
 })
 
 test('el cartel g0n se dibuja arriba de NERV con el cuadro del tema, también en la terminal angosta', async ($, on) => {
@@ -854,14 +856,34 @@ test('la línea NERV se dibuja bajo el hint del prompt y conserva la línea del 
   expect(text).toContain('SYNC')
 })
 
-test('EN VIVO: en Go Live se listan sólo los que miran; sin Go Live, los del canal', () => {
+test('EN VIVO: de Discord sólo se muestran los que miran, con "+N más" para el resto', () => {
   const dc = { ch: 'general', g: 'g', n: 12, m: [{ name: 'a', self: true, speaking: false, mute: false, deaf: false, streaming: true }], live: true, vc: 9, v: ['x', 'y'] }
-  expect(liveDcList(dc)).toEqual({ members: [], more: 0, viewers: ['x', 'y'], viewersMore: 7, summary: '12 en el canal' })
-  const off = liveDcList({ ...dc, live: false, vc: 0, v: [] })
-  expect(off.members.length).toBe(1)
-  expect(off.more).toBe(11)
-  expect(off.viewers).toEqual([])
-  expect(off.summary).toBe('')
+  expect(liveViewers(dc)).toEqual({ names: ['x', 'y'], more: 7 })
+  expect(liveViewers({ ...dc, vc: 0, v: [] })).toEqual({ names: [], more: 0 })
+})
+
+test('EN VIVO: sin Go Live no hay tarjeta de Discord, pero el chat y las cámaras siguen', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] === 'bash' && e.argv.includes('nerv-live'))
+      return {
+        value: {
+          exitCode: 0,
+          stderr: '',
+          stdout: ['cam\ton\t1920\t1080\t30\t5', 'ip\ton\t1280\t720\t30\t5', 'ipstate\tcamera\t\t0', 'dc\t' + JSON.stringify({ ch: 'general', g: 'NERV HQ', n: 3, m: [{ name: 'rei', self: false, speaking: true, mute: false, deaf: false, streaming: false }, { name: 'gon', self: true, speaking: false, mute: true, deaf: false, streaming: false }], live: false, vc: 0, v: [] }), 'discord\t1'].join('\n'),
+        },
+      }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/r/nerv-discord.json' ? JSON.stringify({ chat: { ch: '1', m: [{ a: 'asuka', t: 'hola desde el canal', ts: 1, self: false }] } }) : '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'vivo' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows: 200, contentRows: 200 } } })
+  const drawn = JSON.stringify(await m.drawn())
+  for (const x of ['CHAT DEL CANAL', 'hola desde el canal', 'STREAMCAM', 'IPHONE']) expect(drawn).toContain(x)
+  for (const x of ['DISCORD', 'GO LIVE', 'MIRAN', 'en el canal', 'general', 'NERV HQ', 'rei', 'gon (vos)', 'mudo', 'live-dc']) expect(drawn).not.toContain(x)
 })
 
 test('EN VIVO: el cartel g0n y el EFFORT se ocultan sólo en la pestaña EN VIVO', async ($, on) => {

@@ -766,11 +766,8 @@ export const chatLines = (msgs: readonly LiveChatMsg[], width: number, max: numb
   return out
 }
 
-// En Go Live sólo se listan los que te miran; los del canal quedan en un resumen de una línea.
-export const liveDcList = (dc: LiveDc) =>
-  dc.live
-    ? { members: [] as LiveDcMember[], more: 0, viewers: dc.v, viewersMore: Math.max(0, dc.vc - dc.v.length), summary: `${dc.n} en el canal` }
-    : { members: dc.m, more: Math.max(0, dc.n - dc.m.length), viewers: [] as string[], viewersMore: 0, summary: '' }
+// En Go Live se listan sólo los que te miran; los que no entran quedan en "+N más".
+export const liveViewers = (dc: LiveDc) => ({ names: dc.v, more: Math.max(0, dc.vc - dc.v.length) })
 
 export const liveLens = (raw: string): string => {
   const j = liveJson(raw)
@@ -1912,44 +1909,17 @@ function draw($: any, e: any) {
     const view = Math.max(3, (e.props.scroll?.bodyRows || 0) - measure(out.slice(0, headN), cols))
     const dc = live.discord ? live.dc : undefined
     const golive = !!dc?.live
-    const dcTitle = !live.discord ? '◇ DISCORD · cerrado' : golive ? `◉ GO LIVE · ${dc!.vc} ${dc!.vc === 1 ? 'mirando' : 'mirándote'}` : dc ? `◇ DISCORD · ${dc.n} en el canal` : '◇ DISCORD'
-    const flag = (x: LiveDcMember) => [x.streaming ? 'EN VIVO' : '', x.deaf ? 'sordo' : x.mute ? 'mudo' : ''].filter(Boolean).join(' · ')
-    const list = dc ? liveDcList(dc) : undefined
-    const dcCard = card('live-dc', dcTitle, golive ? C.red : dc ? C.cyan : C.dim, [
-      ...(!live.discord
-        ? [t([span('Discord no está abierto', C.dim)])]
-        : dc === undefined
-          ? [t([span('falta Vencord', C.amber, { bold: true }), span(narrow ? '' : ' · sin nerv-discord.json', C.dim)])]
-          : dc === null || !list
-            ? [t([span('fuera de un canal de voz', C.muted)])]
-            : [
-                kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(golive ? list.summary : clip(dc.g, 16), C.dim)]),
-                ...list.members.map((x, i) =>
-                  Box({
-                    key: 'live-dc-m' + i,
-                    flexDirection: 'row',
-                    justifyContent: 'space-between',
-                    children: [
-                      t([
-                        span(x.speaking ? '◉ ' : '○ ', x.speaking ? C.lime : C.dim),
-                        span(clip(x.name, w - 16) + (x.self ? ' (vos)' : ''), x.speaking ? C.lime : x.deaf || x.mute ? C.muted : C.text, { bold: x.speaking }),
-                      ]),
-                      t([span(flag(x), x.streaming ? C.red : C.dim, { bold: x.streaming })]),
-                    ],
-                  }),
-                ),
-                ...(list.more ? [t([span(`  +${list.more} más`, C.dim)])] : []),
-                ...(golive
-                  ? [
-                      ...(list.viewers.length
-                        ? wrapCells(list.viewers.join(', ') + (list.viewersMore ? ` +${list.viewersMore} más` : ''), w - 8, w - 2)
-                            .slice(0, 2)
-                            .map((line, i) => t([span(i ? '  ' : 'MIRAN ', C.red, { bold: true }), span(line, C.text)]))
-                        : [t([span('MIRAN ', C.red, { bold: true }), span('nadie todavía', C.dim)])]),
-                    ]
-                  : []),
-              ]),
-    ])
+    // De Discord sólo van los que te miran, y sólo mientras estás en Go Live.
+    const viewers = golive ? liveViewers(dc!) : undefined
+    const dcCard = viewers
+      ? card('live-dc', `◉ GO LIVE · ${dc!.vc} ${dc!.vc === 1 ? 'mirando' : 'mirándote'}`, C.red, [
+          ...(viewers.names.length
+            ? wrapCells(viewers.names.join(', ') + (viewers.more ? ` +${viewers.more} más` : ''), w - 8, w - 2)
+                .slice(0, 2)
+                .map((line, i) => t([span(i ? '  ' : 'MIRAN ', C.red, { bold: true }), span(line, C.text)]))
+            : [t([span('MIRAN ', C.red, { bold: true }), span('nadie todavía', C.dim)])]),
+        ])
+      : undefined
     const chatOn = live.discord && !!dc
     const all = live.chat ? chatLines(live.chat, w - 2, 999) : []
     const lines = dock ? all : all.slice(-CHAT_ROWS)
@@ -2024,7 +1994,7 @@ function draw($: any, e: any) {
       ])
       cams = [camCard, ipCard]
       const on = (['cam', 'ip'] as const).filter((k) => live[k].on)
-      const over = measure([dcCard, ...(chatCard ? [chatCard] : []), ...cams], cols) - view
+      const over = measure([...(dcCard ? [dcCard] : []), ...(chatCard ? [chatCard] : []), ...cams], cols) - view
       const shrunk = on.some((k) => sz[k]! < full[k]!)
       if (!dock || !on.length || over === 0 || (over < 0 && !shrunk)) break
       const total = on.reduce((a, k) => a + full[k]!, 0)
@@ -2035,7 +2005,7 @@ function draw($: any, e: any) {
         if (sz[k]! < full[k]!) (sz[k]!++, left--)
       }
     }
-    out.push(dcCard, ...(chatCard ? [chatCard] : []), ...cams)
+    out.push(...(dcCard ? [dcCard] : []), ...(chatCard ? [chatCard] : []), ...cams)
   }
 
   const lvl = effortLevel()

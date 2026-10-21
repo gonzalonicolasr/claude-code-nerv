@@ -39,7 +39,7 @@ abiertas y lo que pliegues queda guardado).
     pongas en `~/.config/nerv/projects.json` como `{ "roots": ["~/projects", "~/otra"] }`.
 - **3 · HW:** GPU, VRAM, CPU y RAM con un gráfico animado, periféricos, monitores y máquinas
   secundarias.
-- **4 · EN VIVO:** la StreamCam y el iPhone en miniatura, el micrófono y los botones para abrir los overlays, cambiar la banda y tapar la cámara.
+- **4 · EN VIVO:** la StreamCam y el iPhone en miniatura con los botones para abrir los overlays, cambiar la banda y tapar la cámara; de Discord, sólo quiénes te miran mientras estás en Go Live y el chat del canal de voz.
 - **5 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
   botón para iniciar una corrida.
 
