@@ -733,6 +733,13 @@ export const wrapCells = (s: string, first: number, rest = first): string[] => {
   return out
 }
 
+// Filas visibles de la tarjeta del chat en el dock; el resto se lee scrolleando adentro.
+export const CHAT_ROWS = 5
+let chatPrevMax = 0
+// Scroll del chat: si estaba abajo del todo (o nunca se tocó) sigue anclado al último mensaje;
+// si subiste a leer, se queda donde estabas.
+export const chatScroll = (off: number | undefined, prevMax: number, max: number) => (off === undefined || off >= prevMax ? max : Math.min(off, max))
+
 export type ChatLine = { author?: string; text: string; self: boolean; who: number }
 // Líneas del chat para `width` celdas, lo más nuevo abajo, en `max` líneas como mucho. Entran
 // mensajes enteros desde el último hacia atrás; si el último solo no entra, se recorta con "…".
@@ -1897,11 +1904,11 @@ function draw($: any, e: any) {
     const full: Record<string, number> = { cam: nat(848 / 1328), ip: nat(3 / 4) }
     const sz: Record<string, number> = { ...full }
     const slot = (key: string) => Box({ key: `live-slot-${key}`, height: sz[key] })
-    const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
-    // Dos páginas en el dock: arriba GO LIVE y el chat (que rellena hasta el alto de la vista, así
-    // las cámaras no saltan cuando llega un mensaje); abajo las dos cámaras, que se achican parejo
-    // sólo si entre las dos no entran en una vista. Sin chat (Discord cerrado o fuera de un canal)
-    // todo va en una sola vista. Acá no hay cartel g0n ni EFFORT abajo.
+    // Los datos de cada cámara van en filas que ya existen, así el hueco de la ventana es más alto.
+    const fps = (c: LiveCam) => span(c.on && c.fps ? `${c.fps} fps ` : '', C.muted)
+    const cpu = (c: LiveCam) => span(c.on ? `cpu ${c.cpu}%` : '', c.cpu > 60 ? C.amber : C.dim)
+    // Una sola vista en el dock: GO LIVE, el chat de alto fijo (scroll adentro) y las dos cámaras,
+    // que se achican parejo lo que haga falta para entrar. Acá no hay cartel g0n ni EFFORT abajo.
     const view = Math.max(3, (e.props.scroll?.bodyRows || 0) - measure(out.slice(0, headN), cols))
     const dc = live.discord ? live.dc : undefined
     const golive = !!dc?.live
@@ -1916,7 +1923,7 @@ function draw($: any, e: any) {
           : dc === null || !list
             ? [t([span('fuera de un canal de voz', C.muted)])]
             : [
-                kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(clip(dc.g, 16), C.dim)]),
+                kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(golive ? list.summary : clip(dc.g, 16), C.dim)]),
                 ...list.members.map((x, i) =>
                   Box({
                     key: 'live-dc-m' + i,
@@ -1936,35 +1943,39 @@ function draw($: any, e: any) {
                   ? [
                       ...(list.viewers.length
                         ? wrapCells(list.viewers.join(', ') + (list.viewersMore ? ` +${list.viewersMore} más` : ''), w - 8, w - 2)
-                            .slice(0, 3)
+                            .slice(0, 2)
                             .map((line, i) => t([span(i ? '  ' : 'MIRAN ', C.red, { bold: true }), span(line, C.text)]))
                         : [t([span('MIRAN ', C.red, { bold: true }), span('nadie todavía', C.dim)])]),
-                      t([span(`👥 ${list.summary}`, C.dim)]),
                     ]
                   : []),
               ]),
     ])
     const chatOn = live.discord && !!dc
-    const chatAll = live.chat ? chatLines(live.chat, w - 2, 99).length : 0
-    const chatN = !chatOn ? 0 : dock ? Math.max(4, view - measure([dcCard], cols) - 3) : Math.max(1, Math.min(16, chatAll))
-    const lines = live.chat ? chatLines(live.chat, w - 2, chatN) : []
+    const all = live.chat ? chatLines(live.chat, w - 2, 999) : []
+    const lines = dock ? all : all.slice(-CHAT_ROWS)
     const hue = (l: ChatLine) => (l.self ? C.lime : [C.cyan, C.orange, C.violet, C.amber, C.pink][l.who % 5]!)
     const chatRows = !live.chat
       ? [t([span(narrow ? 'recargá Discord (Ctrl+R)' : 'para ver el chat recargá Discord (Ctrl+R) cuando puedas', C.dim)])]
       : !lines.length
         ? [t([span('sin mensajes todavía', C.dim)])]
         : lines.map((l) => t(l.author ? [span(l.author, hue(l), { bold: true }), span(': ', C.dim), span(l.text, C.text)] : [span(l.text, C.text)]))
-    const pad = dock && live.chat?.length ? Math.max(0, chatN - chatRows.length) : 0
-    const chatCard = chatOn ? card('live-chat', '◇ CHAT DEL CANAL', live.chat?.length ? C.cyan : C.dim, [...Array.from({ length: pad }, () => t([span(' ', C.dim)])), ...chatRows]) : undefined
+    // Alto fijo con scroll adentro, anclado al último mensaje salvo que hayas subido a leer.
+    if (dock && live.chat?.length) chatRows.unshift(...Array.from({ length: Math.max(0, CHAT_ROWS - chatRows.length) }, () => t([span(' ', C.dim)])))
+    if (dock) {
+      const max = Math.max(0, chatRows.length - CHAT_ROWS)
+      cardScroll['live-chat'] = chatScroll(cardScroll['live-chat'], chatPrevMax, max)
+      chatPrevMax = max
+    }
+    const chatCard = chatOn ? scard('live-chat', '◇ CHAT DEL CANAL', live.chat?.length ? C.cyan : C.dim, chatRows, CHAT_ROWS) : undefined
     let cams: any[] = []
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 4; pass++) {
       const camCard = card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
-        ...(live.cam.on ? [slot('cam'), stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
+        ...(live.cam.on ? [slot('cam')] : [t([span('el overlay está cerrado', C.muted)])]),
         Box({
           key: 'live-cam-ctl',
           flexDirection: 'row',
-          flexWrap: 'wrap',
-          children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
+          justifyContent: 'space-between',
+          children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`])), t([fps(live.cam), cpu(live.cam)])],
         }),
         Input({
           key: 'live-text-' + liveTextKey,
@@ -1983,13 +1994,13 @@ function draw($: any, e: any) {
       const ip = live.ip
       const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
       const ipCard = card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
-        ...(ip.on ? [slot('ip'), stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
+        ...(ip.on ? [slot('ip')] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
         ip.reach
           ? kv(
               [span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)],
-              [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)],
+              [fps(ip), span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)],
             )
-          : t([span('DroidCam no responde en el celu', C.dim)]),
+          : kv([span(narrow ? 'DroidCam no responde' : 'DroidCam no responde en el celu', C.dim)], [fps(ip)]),
         Box({
           key: 'live-ip-ctl',
           flexDirection: 'row',
@@ -2013,10 +2024,16 @@ function draw($: any, e: any) {
       ])
       cams = [camCard, ipCard]
       const on = (['cam', 'ip'] as const).filter((k) => live[k].on)
-      const over = measure(chatCard ? cams : [dcCard, ...cams], cols) - view
-      if (!dock || over <= 0 || !on.length) break
-      const total = on.reduce((a, k) => a + full[k], 0)
-      for (const k of on) sz[k] = Math.max(Math.ceil(full[k] * 0.6), Math.floor(((total - over) * full[k]) / total))
+      const over = measure([dcCard, ...(chatCard ? [chatCard] : []), ...cams], cols) - view
+      const shrunk = on.some((k) => sz[k]! < full[k]!)
+      if (!dock || !on.length || over === 0 || (over < 0 && !shrunk)) break
+      const total = on.reduce((a, k) => a + full[k]!, 0)
+      const room = Math.min(total, on.reduce((a, k) => a + sz[k]!, 0) - over)
+      for (const k of on) sz[k] = Math.max(4, Math.floor((room * full[k]!) / total))
+      for (let left = room - on.reduce((a, k) => a + sz[k]!, 0), i = 0; left > 0 && i < 8; i++) {
+        const k = on[i % on.length]!
+        if (sz[k]! < full[k]!) (sz[k]!++, left--)
+      }
     }
     out.push(dcCard, ...(chatCard ? [chatCard] : []), ...cams)
   }

@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { chatLines, effortShownIn, g0nShownIn, liveChat, liveDcList, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveDcList, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -504,7 +504,7 @@ test('EN VIVO muestra GO LIVE, el chat y las dos cámaras, sin micrófono ni EFF
   await $.command.run({ command: 'nerv', args: 'vivo' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows: 200, contentRows: 200 } } })
   const drawn = JSON.stringify(await m.drawn())
-  for (const x of ['EN VIVO', 'STREAMCAM · en vivo', '1920×1080', '30 fps', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%', 'GO LIVE · 9 mirándote', 'general', 'NERV HQ', 'asuka, shinji +7 más', '12 en el canal', 'CHAT DEL CANAL', 'hola desde el canal', 'buenas']) expect(drawn).toContain(x)
+  for (const x of ['EN VIVO', 'STREAMCAM · en vivo', '30 fps', 'cpu 13%', 'IPHONE · tapado (cafe)', 'Ultrawide', '87%', 'GO LIVE · 9 mirándote', 'general', 'asuka, shinji +7 más', '12 en el canal', 'CHAT DEL CANAL', 'hola desde el canal', 'buenas']) expect(drawn).toContain(x)
   for (const x of ['gon (vos)', 'mudo', 'g0n-img', 'SILENCIADO', 'AL AIRE', 'live-mic', 'effort-foot', 'EFFORT']) expect(drawn).not.toContain(x)
   expect(drawn.indexOf('GO LIVE')).toBeLessThan(drawn.indexOf('CHAT DEL CANAL'))
   expect(drawn.indexOf('CHAT DEL CANAL')).toBeLessThan(drawn.indexOf('STREAMCAM'))
@@ -948,4 +948,41 @@ test('EN VIVO: con el NervLive viejo el chat pide recargar Discord, y sin mensaj
   await $.command.run({ command: 'nerv', args: 'vivo' })
   const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   expect(JSON.stringify(await n.drawn())).toContain('sin mensajes todavía')
+})
+
+test('chat: el scroll de adentro queda anclado al último mensaje salvo que hayas subido', () => {
+  expect(chatScroll(undefined, 0, 4)).toBe(4)
+  expect(chatScroll(4, 4, 6)).toBe(6)
+  expect(chatScroll(1, 4, 6)).toBe(1)
+  expect(chatScroll(5, 4, 2)).toBe(2)
+  expect(chatScroll(0, 0, 0)).toBe(0)
+})
+
+test('EN VIVO: el chat tiene alto fijo con scroll adentro y las cámaras entran en la misma vista', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  const msgs = Array.from({ length: 8 }, (_, i) => ({ a: 'piloto' + i, t: `mensaje número ${i} con algo de texto para que ocupe una línea larga o dos en la tarjeta`, ts: i, self: false }))
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] === 'bash' && e.argv.includes('nerv-live'))
+      return {
+        value: {
+          exitCode: 0,
+          stderr: '',
+          stdout: ['cam\ton\t1920\t1080\t30\t5', 'ip\ton\t1280\t720\t30\t5', 'ipstate\tcamera\t\t0', 'dc\t' + JSON.stringify({ ch: 'general', g: 'g', n: 5, m: [], live: true, vc: 2, v: ['asuka', 'rei'] }), 'discord\t1'].join('\n'),
+        },
+      }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/r/nerv-discord.json' ? JSON.stringify({ chat: { ch: '1', m: msgs } }) : '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'vivo' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows: 50, contentRows: 50 } } })
+  const drawn = JSON.stringify(await m.drawn())
+  expect(CHAT_ROWS).toBeLessThanOrEqual(7)
+  expect(drawn).toContain('live-chat-win')
+  expect(drawn).toContain(`"height":${CHAT_ROWS}`)
+  expect(drawn).toContain('piloto7')
+  for (const x of ['STREAMCAM', 'IPHONE', 'MIRAN', 'asuka, rei']) expect(drawn).toContain(x)
+  expect(drawn).not.toContain('body-bar')
 })
