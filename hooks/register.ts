@@ -110,24 +110,23 @@ const gpuHist: number[] = []
 type LiveCam = { on: boolean; w: number; h: number; fps: number; cpu: number }
 type LiveDcMember = { name: string; self: boolean; speaking: boolean; mute: boolean; deaf: boolean; streaming: boolean }
 type LiveDc = { ch: string; g: string; n: number; m: LiveDcMember[]; live: boolean; vc: number; v: string[] }
+export type LiveChatMsg = { a: string; t: string; ts: number; self: boolean }
 let live: {
   cam: LiveCam
   ip: LiveCam & { mode: string; scene: string; blur: boolean; name: string; bat: number; charging: boolean; lens: string; reach: boolean }
-  mic: { muted: boolean; vol: number; name: string }
   text: string
-  sharing: boolean
   discord: boolean
   dc: LiveDc | null | undefined
+  chat: LiveChatMsg[] | undefined
   busy: boolean
   n: number
 } = {
   cam: { on: false, w: 0, h: 0, fps: 0, cpu: 0 },
   ip: { on: false, w: 0, h: 0, fps: 0, cpu: 0, mode: '', scene: '', blur: false, name: '', bat: -1, charging: false, lens: '', reach: false },
-  mic: { muted: false, vol: 0, name: '' },
   text: '',
-  sharing: false,
   discord: false,
   dc: undefined,
+  chat: undefined,
   busy: false,
   n: 0,
 }
@@ -661,10 +660,8 @@ snap ip iphonecam
 st=\${XDG_STATE_HOME:-$HOME/.local/state}
 printf 'ipstate\\t%s\\t%s\\t%s\\n' "$(cat "$rt/iphonecam-mode" 2>/dev/null)" "$(cat "$st/iphonecam/scene" 2>/dev/null)" "$(cat "$rt/iphonecam-blur" 2>/dev/null)"
 printf 'text\\t%s\\n' "$(tr '\\n\\t' '  ' < "$st/camoverlay-text.txt" 2>/dev/null)"
-printf 'mic\\t%s\\t%s\\n' "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null)" "$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node.nick = "\\(.*\\)"/\\1/p' | head -1)"
 printf 'discord\\t%s\\n' "$(pgrep -ix discord >/dev/null && echo 1)"
 if [ "$deep" = 1 ]; then
-  printf 'sharing\\t%s\\n' "$(pw-cli ls Node 2>/dev/null | grep -c 'node.name = "xdph')"
   ip=$(jq -r '.. | .cur_dev_ip? // empty' "$HOME/.config/droidcam-obs-client/basic/scenes/Untitled.json" 2>/dev/null | head -1)
   if [ -n "$ip" ] && name=$(curl -fs -m 1.5 "http://$ip:4747/v1/phone/name"); then
     printf 'ipapi\\t%s\\t%s\\t%s\\n' "$(echo "$name" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/phone/battery_info" | tr '\\n\\t' '  ')" "$(curl -fs -m 1.5 "http://$ip:4747/v1/camera/info" | tr '\\n\\t' '  ')"
@@ -693,6 +690,80 @@ export const liveDc = (raw: string): LiveDc | null | undefined => {
   const v = (Array.isArray(j.v) ? j.v : []).map((x: any) => String(x || '?'))
   return { ch: String(j.ch), g: String(j.g || ''), n: Math.max(Number(j.n) || 0, m.length), m, live: !!j.live, vc: Math.max(Number(j.vc) || 0, v.length), v }
 }
+
+// El chat del canal de voz viene en nerv-discord.json. Sin campo chat = el NervLive cargado
+// en Discord es el viejo (falta recargar); lista vacía = no hay mensajes.
+export const liveChat = (raw: string): LiveChatMsg[] | undefined => {
+  const c = liveJson(raw)?.chat
+  if (!c || typeof c !== 'object' || !Array.isArray(c.m)) return undefined
+  return c.m.slice(-8).map((x: any) => ({ a: String(x?.a || '?'), t: String(x?.t ?? '').replace(/\s+/g, ' ').trim(), ts: Number(x?.ts) || 0, self: !!x?.self }))
+}
+
+// Corta en palabras por ancho de celdas: la primera línea mide `first`, las siguientes `rest`.
+// Una palabra más larga que la línea se parte.
+export const wrapCells = (s: string, first: number, rest = first): string[] => {
+  const out: string[] = []
+  let line = ''
+  const room = () => Math.max(1, out.length ? rest : first)
+  for (const word of String(s).split(' ').filter(Boolean)) {
+    let wd = word
+    if (line && cellWidth(line) + 1 + cellWidth(wd) > room()) {
+      out.push(line)
+      line = ''
+    }
+    while (cellWidth((line ? line + ' ' : '') + wd) > room()) {
+      let cut = ''
+      for (const ch of wd) {
+        if (cellWidth((line ? line + ' ' : '') + cut + ch) > room()) break
+        cut += ch
+      }
+      if (!cut && line) {
+        out.push(line)
+        line = ''
+        continue
+      }
+      if (!cut) cut = [...wd][0]!
+      out.push((line ? line + ' ' : '') + cut)
+      line = ''
+      wd = wd.slice(cut.length)
+    }
+    line = line ? line + ' ' + wd : wd
+  }
+  if (line || !out.length) out.push(line)
+  return out
+}
+
+export type ChatLine = { author?: string; text: string; self: boolean; who: number }
+// Líneas del chat para `width` celdas, lo más nuevo abajo, en `max` líneas como mucho. Entran
+// mensajes enteros desde el último hacia atrás; si el último solo no entra, se recorta con "…".
+export const chatLines = (msgs: readonly LiveChatMsg[], width: number, max: number): ChatLine[] => {
+  const out: ChatLine[] = []
+  for (let i = msgs.length - 1; i >= 0 && max > 0; i--) {
+    const m = msgs[i]!
+    const author = clip(m.a, Math.max(4, Math.floor(width / 2)))
+    const body = wrapCells(m.t, width - cellWidth(author) - 2, width - 2)
+    const who = [...m.a].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)
+    const lines: ChatLine[] = body.map((text, j) => (j ? { text: '  ' + text, self: m.self, who } : { author, text, self: m.self, who }))
+    if (out.length + lines.length > max) {
+      if (!out.length) {
+        const keep = lines.slice(0, max)
+        const last = keep[max - 1]!
+        const room = Math.max(1, width - (last.author ? cellWidth(last.author) + 2 : 0))
+        last.text = cellWidth(last.text) < room ? last.text + '…' : clip(last.text, room)
+        return keep
+      }
+      break
+    }
+    out.unshift(...lines)
+  }
+  return out
+}
+
+// En Go Live sólo se listan los que te miran; los del canal quedan en un resumen de una línea.
+export const liveDcList = (dc: LiveDc) =>
+  dc.live
+    ? { members: [] as LiveDcMember[], more: 0, viewers: dc.v, viewersMore: Math.max(0, dc.vc - dc.v.length), summary: `${dc.n} en el canal` }
+    : { members: dc.m, more: Math.max(0, dc.n - dc.m.length), viewers: [] as string[], viewersMore: 0, summary: '' }
 
 export const liveLens = (raw: string): string => {
   const j = liveJson(raw)
@@ -729,13 +800,8 @@ async function refreshLive($: any) {
         live.ip.scene = f[2] || ''
         live.ip.blur = f[3] === '1'
       } else if (f[0] === 'text') live.text = f[1] || ''
-      else if (f[0] === 'mic') {
-        live.mic.muted = /MUTED/.test(f[1] || '')
-        live.mic.vol = Math.round((Number(/[\d.]+/.exec(f[1] || '')?.[0]) || 0) * 100)
-        live.mic.name = f[2] || ''
-      } else if (f[0] === 'dc') live.dc = liveDc(f[1] || '')
+      else if (f[0] === 'dc') live.dc = liveDc(f[1] || '')
       else if (f[0] === 'discord') live.discord = f[1] === '1'
-      else if (f[0] === 'sharing') live.sharing = Number(f[1]) > 0
       else if (f[0] === 'ipapi') {
         live.ip.reach = !!f[1]
         if (f[1]) {
@@ -745,6 +811,7 @@ async function refreshLive($: any) {
         }
       }
     }
+    live.chat = live.discord && live.dc ? liveChat(String((await $.fs.read(`${runDir}/nerv-discord.json`).catch(() => '')) || '')) : undefined
   } finally {
     live.busy = false
   }
@@ -896,6 +963,10 @@ const G0N_FRAMES = 64
 const G0N_MS = 70
 let g0nShown = -1
 const g0nFrame = () => Math.floor(now() / G0N_MS) % G0N_FRAMES
+// En EN VIVO el cartel se oculta y sus filas quedan para las cámaras y el chat.
+export const g0nShownIn = (tabId: string) => tabId !== 'live'
+// El medidor de EFFORT de abajo también se oculta en EN VIVO: esas filas van a las cámaras.
+export const effortShownIn = (tabId: string) => tabId !== 'live'
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -1086,7 +1157,8 @@ function draw($: any, e: any) {
     if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
-  if (Image && e.surface === 'terminal') {
+  if (!g0nShownIn(tab)) g0nShown = -1
+  else if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f
     out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source: { file: `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`, format: 'png' }, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
@@ -1821,115 +1893,132 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'live') {
-    const nat = (aspect: number) => Math.max(4, Math.min(24, Math.ceil((w + 2) * 0.462 * aspect)))
+    const nat = (aspect: number) => Math.max(4, Math.min(32, Math.ceil((w + 2) * 0.462 * aspect)))
     const full: Record<string, number> = { cam: nat(848 / 1328), ip: nat(3 / 4) }
     const sz: Record<string, number> = { ...full }
     const slot = (key: string) => Box({ key: `live-slot-${key}`, height: sz[key] })
     const stat = (c: LiveCam) => kv([span(c.w ? `${c.w}×${c.h}` : '—', C.muted), span(c.fps ? `  ${c.fps} fps` : '', C.muted)], [span(`cpu ${c.cpu}%`, c.cpu > 60 ? C.amber : C.dim)])
-    const rec = !!(live.cam.on || live.ip.on)
-    const at = out.length
+    // Dos páginas en el dock: arriba GO LIVE y el chat (que rellena hasta el alto de la vista, así
+    // las cámaras no saltan cuando llega un mensaje); abajo las dos cámaras, que se achican parejo
+    // sólo si entre las dos no entran en una vista. Sin chat (Discord cerrado o fuera de un canal)
+    // todo va en una sola vista. Acá no hay cartel g0n ni EFFORT abajo.
+    const view = Math.max(3, (e.props.scroll?.bodyRows || 0) - measure(out.slice(0, headN), cols))
+    const dc = live.discord ? live.dc : undefined
+    const golive = !!dc?.live
+    const dcTitle = !live.discord ? '◇ DISCORD · cerrado' : golive ? `◉ GO LIVE · ${dc!.vc} ${dc!.vc === 1 ? 'mirando' : 'mirándote'}` : dc ? `◇ DISCORD · ${dc.n} en el canal` : '◇ DISCORD'
+    const flag = (x: LiveDcMember) => [x.streaming ? 'EN VIVO' : '', x.deaf ? 'sordo' : x.mute ? 'mudo' : ''].filter(Boolean).join(' · ')
+    const list = dc ? liveDcList(dc) : undefined
+    const dcCard = card('live-dc', dcTitle, golive ? C.red : dc ? C.cyan : C.dim, [
+      ...(!live.discord
+        ? [t([span('Discord no está abierto', C.dim)])]
+        : dc === undefined
+          ? [t([span('falta Vencord', C.amber, { bold: true }), span(narrow ? '' : ' · sin nerv-discord.json', C.dim)])]
+          : dc === null || !list
+            ? [t([span('fuera de un canal de voz', C.muted)])]
+            : [
+                kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(clip(dc.g, 16), C.dim)]),
+                ...list.members.map((x, i) =>
+                  Box({
+                    key: 'live-dc-m' + i,
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    children: [
+                      t([
+                        span(x.speaking ? '◉ ' : '○ ', x.speaking ? C.lime : C.dim),
+                        span(clip(x.name, w - 16) + (x.self ? ' (vos)' : ''), x.speaking ? C.lime : x.deaf || x.mute ? C.muted : C.text, { bold: x.speaking }),
+                      ]),
+                      t([span(flag(x), x.streaming ? C.red : C.dim, { bold: x.streaming })]),
+                    ],
+                  }),
+                ),
+                ...(list.more ? [t([span(`  +${list.more} más`, C.dim)])] : []),
+                ...(golive
+                  ? [
+                      ...(list.viewers.length
+                        ? wrapCells(list.viewers.join(', ') + (list.viewersMore ? ` +${list.viewersMore} más` : ''), w - 8, w - 2)
+                            .slice(0, 3)
+                            .map((line, i) => t([span(i ? '  ' : 'MIRAN ', C.red, { bold: true }), span(line, C.text)]))
+                        : [t([span('MIRAN ', C.red, { bold: true }), span('nadie todavía', C.dim)])]),
+                      t([span(`👥 ${list.summary}`, C.dim)]),
+                    ]
+                  : []),
+              ]),
+    ])
+    const chatOn = live.discord && !!dc
+    const chatAll = live.chat ? chatLines(live.chat, w - 2, 99).length : 0
+    const chatN = !chatOn ? 0 : dock ? Math.max(4, view - measure([dcCard], cols) - 3) : Math.max(1, Math.min(16, chatAll))
+    const lines = live.chat ? chatLines(live.chat, w - 2, chatN) : []
+    const hue = (l: ChatLine) => (l.self ? C.lime : [C.cyan, C.orange, C.violet, C.amber, C.pink][l.who % 5]!)
+    const chatRows = !live.chat
+      ? [t([span(narrow ? 'recargá Discord (Ctrl+R)' : 'para ver el chat recargá Discord (Ctrl+R) cuando puedas', C.dim)])]
+      : !lines.length
+        ? [t([span('sin mensajes todavía', C.dim)])]
+        : lines.map((l) => t(l.author ? [span(l.author, hue(l), { bold: true }), span(': ', C.dim), span(l.text, C.text)] : [span(l.text, C.text)]))
+    const pad = dock && live.chat?.length ? Math.max(0, chatN - chatRows.length) : 0
+    const chatCard = chatOn ? card('live-chat', '◇ CHAT DEL CANAL', live.chat?.length ? C.cyan : C.dim, [...Array.from({ length: pad }, () => t([span(' ', C.dim)])), ...chatRows]) : undefined
+    let cams: any[] = []
     for (let pass = 0; pass < 2; pass++) {
-      out.length = at
-      out.push(
-        card('live-head', live.sharing ? '◉ AL AIRE · compartiendo pantalla' : rec ? '◎ CÁMARAS PRENDIDAS' : '○ FUERA DEL AIRE', live.sharing ? C.red : rec ? C.lime : C.dim, [
-          kv([span('🎙 ', C.text), span(clip(live.mic.name || 'micrófono', w - 18), live.mic.muted ? C.dim : C.text)], [span(live.mic.muted ? 'SILENCIADO' : `${live.mic.vol}%`, live.mic.muted ? C.red : C.lime, { bold: live.mic.muted })]),
-          Box({
-            key: 'live-ctl',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            children: [chip('live-mic', live.mic.muted ? '🎙 activar' : '🎙 silenciar', live.mic.muted, live.mic.muted ? C.red : C.tabBg, () => void liveRun($, ['wpctl', 'set-mute', '@DEFAULT_AUDIO_SOURCE@', 'toggle']))],
-          }),
-        ]),
-      )
-      const dc = live.discord ? live.dc : undefined
-      const golive = !!dc?.live
-      const dcTitle = !live.discord ? '◇ DISCORD · cerrado' : golive ? `◉ GO LIVE · ${dc!.vc} ${dc!.vc === 1 ? 'mirando' : 'mirándote'}` : dc ? `◇ DISCORD · ${dc.n} en el canal` : '◇ DISCORD'
-      const flag = (x: LiveDcMember) => [x.streaming ? 'EN VIVO' : '', x.deaf ? 'sordo' : x.mute ? 'mudo' : ''].filter(Boolean).join(' · ')
-      out.push(
-        card('live-dc', dcTitle, golive ? C.red : dc ? C.cyan : C.dim, [
-          ...(!live.discord
-            ? [t([span('Discord no está abierto', C.dim)])]
-            : dc === undefined
-              ? [t([span('falta Vencord', C.amber, { bold: true }), span(narrow ? '' : ' · sin nerv-discord.json', C.dim)])]
-              : dc === null
-                ? [t([span('fuera de un canal de voz', C.muted)])]
-                : [
-                    kv([span('🔊 ', C.text), span(clip(dc.ch, w - 20), C.text, { bold: true })], [span(clip(dc.g, 16), C.dim)]),
-                    ...dc.m.map((x, i) =>
-                      Box({
-                        key: 'live-dc-m' + i,
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        children: [
-                          t([span(x.speaking ? '◉ ' : '○ ', x.speaking ? C.lime : C.dim), span(clip(x.name, w - 16) + (x.self ? ' (vos)' : ''), x.speaking ? C.lime : x.deaf || x.mute ? C.muted : C.text, { bold: x.speaking })]),
-                          t([span(flag(x), x.streaming ? C.red : C.dim, { bold: x.streaming })]),
-                        ],
-                      }),
-                    ),
-                    ...(dc.n > dc.m.length ? [t([span(`  +${dc.n - dc.m.length} más`, C.dim)])] : []),
-                    ...(golive
-                      ? [
-                          t([span('MIRAN ', C.red, { bold: true }), span(dc!.v.length ? clip(dc!.v.join(', '), w - 10) : 'nadie todavía', dc!.v.length ? C.text : C.dim)]),
-                          ...(dc!.vc > dc!.v.length ? [t([span(`  +${dc!.vc - dc!.v.length} más`, C.dim)])] : []),
-                        ]
-                      : []),
-                  ]),
-        ]),
-      )
-      out.push(
-        card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
-          ...(live.cam.on ? [slot('cam'), stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
-          Box({
-            key: 'live-cam-ctl',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
-          }),
-          Input({
-            key: 'live-text-' + liveTextKey,
-            placeholder: '▭ texto de la banda',
-            value: liveText ?? live.text,
-            submitLabel: 'poner',
-            onInput: (v: string) => (liveText = v),
-            onSubmit: (v: string) => {
-              liveText = undefined
-              liveTextKey++
-              live.text = v.trim()
-              void liveRun($, [`${home}/.local/bin/camoverlay`, '--text', v.trim()])
-            },
-          }),
-        ]),
-      )
+      const camCard = card('live-cam', live.cam.on ? '▣ STREAMCAM · en vivo' : '▣ STREAMCAM · apagada', live.cam.on ? C.lime : C.dim, [
+        ...(live.cam.on ? [slot('cam'), stat(live.cam)] : [t([span('el overlay está cerrado', C.muted)])]),
+        Box({
+          key: 'live-cam-ctl',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [chip('live-cam-tg', live.cam.on ? '■ cerrar' : '▶ abrir', live.cam.on, live.cam.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/camoverlay`]))],
+        }),
+        Input({
+          key: 'live-text-' + liveTextKey,
+          placeholder: '▭ texto de la banda',
+          value: liveText ?? live.text,
+          submitLabel: 'poner',
+          onInput: (v: string) => (liveText = v),
+          onSubmit: (v: string) => {
+            liveText = undefined
+            liveTextKey++
+            live.text = v.trim()
+            void liveRun($, [`${home}/.local/bin/camoverlay`, '--text', v.trim()])
+          },
+        }),
+      ])
       const ip = live.ip
       const ipTitle = !ip.on ? '▣ IPHONE · apagado' : ip.mode === 'placeholder' ? '▣ IPHONE · sin señal' : ip.scene ? `▣ IPHONE · tapado (${ip.scene})` : '▣ IPHONE · en vivo'
-      out.push(
-        card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
-          ...(ip.on ? [slot('ip'), stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
-          ip.reach
-            ? kv([span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)], [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)])
-            : t([span('DroidCam no responde en el celu', C.dim)]),
-          Box({
-            key: 'live-ip-ctl',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            children: [
-              chip('live-ip-tg', ip.on ? '■ cerrar' : '▶ abrir', ip.on, ip.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/iphonecam`])),
-              ...(ip.on
-                ? [
-                    chip('live-ip-priv', ip.scene ? '◉ mostrar' : '◌ tapar', !!ip.scene, ip.scene ? C.violet : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, ...(ip.scene ? ['--scene', ip.scene] : ['--privacy'])])),
-                    chip('live-ip-blur', ip.blur ? '◍ sin blur' : '◍ blur', ip.blur, ip.blur ? C.cyan : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, '--blur'])),
-                  ]
-                : []),
-            ],
-          }),
-        ]),
-      )
+      const ipCard = card('live-ip', ipTitle, !ip.on ? C.dim : ip.mode === 'placeholder' ? C.amber : ip.scene ? C.violet : C.lime, [
+        ...(ip.on ? [slot('ip'), stat(ip)] : [t([span('la ventana del iPhone está cerrada', C.muted)])]),
+        ip.reach
+          ? kv(
+              [span(clip(ip.name || 'iPhone', w - 22), C.text), span(ip.lens ? `  ${clip(ip.lens, 12)}` : '', C.muted)],
+              [span(ip.bat >= 0 ? `${ip.charging ? '⚡' : '▮'} ${ip.bat}%` : '', ip.bat >= 0 && ip.bat < 20 && !ip.charging ? C.red : C.lime)],
+            )
+          : t([span('DroidCam no responde en el celu', C.dim)]),
+        Box({
+          key: 'live-ip-ctl',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          children: [
+            chip('live-ip-tg', ip.on ? '■ cerrar' : '▶ abrir', ip.on, ip.on ? C.tabBg : C.lime, () => void liveRun($, [`${home}/.local/bin/iphonecam`])),
+            ...(ip.on
+              ? [
+                  chip(
+                    'live-ip-priv',
+                    ip.scene ? '◉ mostrar' : '◌ tapar',
+                    !!ip.scene,
+                    ip.scene ? C.violet : C.tabBg,
+                    () => void liveRun($, [`${home}/.local/bin/iphonecam`, ...(ip.scene ? ['--scene', ip.scene] : ['--privacy'])]),
+                  ),
+                  chip('live-ip-blur', ip.blur ? '◍ sin blur' : '◍ blur', ip.blur, ip.blur ? C.cyan : C.tabBg, () => void liveRun($, [`${home}/.local/bin/iphonecam`, '--blur'])),
+                ]
+              : []),
+          ],
+        }),
+      ])
+      cams = [camCard, ipCard]
       const on = (['cam', 'ip'] as const).filter((k) => live[k].on)
-      const over = measure(out, cols) + 6 - (e.props.scroll?.bodyRows || 0)
+      const over = measure(chatCard ? cams : [dcCard, ...cams], cols) - view
       if (!dock || over <= 0 || !on.length) break
       const total = on.reduce((a, k) => a + full[k], 0)
       for (const k of on) sz[k] = Math.max(Math.ceil(full[k] * 0.6), Math.floor(((total - over) * full[k]) / total))
     }
+    out.push(dcCard, ...(chatCard ? [chatCard] : []), ...cams)
   }
 
   const lvl = effortLevel()
@@ -1988,10 +2077,12 @@ function draw($: any, e: any) {
     foot.splice(1, foot.length, ...(narrow ? [Box({ flexDirection: 'row', children: [t([span('◆ ', hue)]), pickRow(Math.floor((cols - 3) / 5), 0)] })] : [Box({ flexDirection: 'row', children: [label, pickRow(6, 1)] })]))
   }
   const rows = e.props.scroll?.bodyRows || 0
-  const footBox = Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot })
+  const showEffort = effortShownIn(tab)
+  const footBox = showEffort ? Box({ key: 'effort-foot', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: foot }) : undefined
   if (!rows || e.props.placement !== 'dock') {
-    if (compact) return Box({ flexDirection: 'column', children: [...out.slice(0, headN), Box({ key: 'effort-top', flexDirection: 'column', marginTop: 0, children: foot.slice(1) }), ...out.slice(headN)] })
-    return Box({ flexDirection: 'column', minHeight: rows || undefined, children: [...out, Box({ key: 'spacer', flexGrow: 1 }), footBox] })
+    if (compact)
+      return Box({ flexDirection: 'column', children: [...out.slice(0, headN), ...(showEffort ? [Box({ key: 'effort-top', flexDirection: 'column', marginTop: 0, children: foot.slice(1) })] : []), ...out.slice(headN)] })
+    return Box({ flexDirection: 'column', minHeight: rows || undefined, children: [...out, Box({ key: 'spacer', flexGrow: 1 }), ...(footBox ? [footBox] : [])] })
   }
   const head = out.slice(0, headN)
   const body = out.slice(headN)
@@ -2032,7 +2123,7 @@ function draw($: any, e: any) {
           ...(rail.length ? [Box({ key: 'body-bar', flexDirection: 'column', width: 1, children: rail })] : []),
         ],
       }),
-      footBox,
+      ...(footBox ? [footBox] : []),
     ],
   })
 }
