@@ -2699,7 +2699,7 @@ const groupOf = (id: string) => (['haiku', 'sonnet', 'opus', 'fable'].includes(i
 
 // ── MODELOS: catálogo del CPAM (CLIProxyAPI local) agrupado por prefijo de cuenta ──
 const CPAM_URL = 'http://127.0.0.1:8317'
-export const MDL_BROKEN: Record<string, string> = { 'nan/glm5.3-flash': 'timeout', 'nan/mimo-v2.6-flash': 'timeout', 'nan/qwen3.6': 'timeout', 'nan/minimax-h3': '401' }
+export const MDL_BROKEN: Record<string, string> = { 'nan/glm5.3-flash': 'timeout', 'nan/mimo-v2.6-flash': 'timeout', 'nan/qwen3.6': 'timeout', 'nan/minimax-h3': '401', 'refuseless/glm-5.3-flash-abliterated': '503' }
 export type MdlGroup = { key: string; label: string; prefix: string; models: string[] }
 export const mdlSplit = (id: string) => {
   const i = id.indexOf('/')
@@ -2723,7 +2723,7 @@ export const mdlGroups = (ids: readonly string[], emails: Record<string, string>
     const key = prefix ? 'p:' + prefix : mdlFamily(name)
     if (!by.has(key)) {
       const who = emails[prefix] ? ' · ' + emails[prefix].split('@')[0] : ''
-      const label = prefix === 'nan' ? 'NaN' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
+      const label = prefix === 'nan' ? 'NaN' : prefix === 'refuseless' ? 'Refuseless (abliterated)' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
       by.set(key, { key: prefix ? prefix : key, label, prefix, models: [] })
     }
     by.get(key)!.models.push(id)
@@ -3041,7 +3041,7 @@ function drawModels($: any, e: any, out: any[], h: any) {
     out.push(card('mdl-pick', '▶ ' + clip(mdlPick, w - 6), mdlSplit(mdlPick).prefix === 'wibond' ? C.red : C.lime, rows))
   }
   for (const g of groups) {
-    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
+    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : g.prefix === 'refuseless' ? C.pink : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
     out.push(
       card('mdl-' + g.key, `${g.label}${g.prefix ? ' · ' + g.prefix + '/' : ''} (${g.models.length})`, color, [
         Box({

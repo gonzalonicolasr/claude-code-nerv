@@ -692,6 +692,8 @@ test('MODELOS: el filtro busca en id y etiqueta y marca los rotos conocidos', ()
   expect(mdlDim('nan/qwen3.6')).toBe('timeout')
   expect(mdlDim('gpt-image-2')).toBe('no chat')
   expect(mdlDim('nan/qwen3.8-flash')).toBe('')
+  expect(mdlDim('refuseless/glm-5.3-flash-abliterated')).toBe('503')
+  expect(mdlGroups(['refuseless/glm-5.3-abliterated'])[0]!.label).toBe('Refuseless (abliterated)')
 })
 
 test('MODELOS: el relanzado reanuda en fork por el CPAM sin la key, o vuelve a Anthropic', () => {
