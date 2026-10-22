@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -739,7 +739,96 @@ test('MODELOS: la pestaña lista los grupos y elegir wibond avisa que es la cuen
   await m.press({ key: 'mdl-wibond/claude-opus-5-5' })
   text = JSON.stringify(await m.drawn())
   expect(text).toContain('cuenta de TRABAJO')
-  expect(text).toContain('reabrir esta sesión')
+  expect(text).toContain('cambiar acá')
+  expect(text).toContain('en tab nueva')
+  // Las acciones quedan dentro del grupo del modelo elegido (el último), no arriba de todo.
+  expect(text.indexOf('"mdl-swap"')).toBeGreaterThan(text.indexOf('Wibond (trabajo)'))
+  expect(text.indexOf('"mdl-swap"')).toBeGreaterThan(text.indexOf('qwen3.8-flash'))
+  // Tocar de nuevo el elegido lo suelta.
+  await m.press({ key: 'mdl-wibond/claude-opus-5-5' })
+  expect(JSON.stringify(await m.drawn())).not.toContain('"mdl-swap"')
+})
+
+test('MODELOS: elegir un modelo muestra sus acciones justo debajo de su grupo, antes del siguiente', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('process.run', async (_$: any, e: any) =>
+    e.argv[0] === 'sh' && e.argv[2].includes('/v1/models')
+      ? { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }, { id: 'ds/deepseek-v4-pro' }, { id: 'claude-sonnet-5' }, { id: 'ag3/gemini-3.8-flash' }] }), stderr: '' } }
+      : { value: { exitCode: 1, stdout: '', stderr: '' } },
+  )
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.drawn()
+  await m.press({ key: 'mdl-claude-sonnet-5' })
+  const text = JSON.stringify(await m.drawn())
+  expect(text).not.toContain('"mdl-pick"')
+  const act = text.indexOf('"mdl-swap"')
+  expect(act).toBeGreaterThan(text.indexOf('claude-sonnet-5'))
+  expect(act).toBeLessThan(text.indexOf('Google ag3'))
+  expect(text).toContain('DeepSeek (API oficial)')
+})
+
+test('MODELOS: "cambiar acá" cierra este Claude y un ayudante retoma la misma conversación en el pane', async ($, on) => {
+  mock.env(on, { HOME: '/h', HERDR_PANE_ID: 'w1:p1', HERDR_WORKSPACE_ID: 'w1' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  let screen = 'algo\n❯\xa0Try "fix typecheck errors"      │ NERV\n'
+  const spawned: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh' && a[2]?.includes('/v1/models')) return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
+    if (a[0] === 'herdr' && a[2] === 'read') return { value: { exitCode: 0, stdout: screen, stderr: '' } }
+    if (a[0] === 'herdr' && a[2] === 'process-info')
+      return { value: { exitCode: 0, stdout: JSON.stringify({ result: { process_info: { foreground_processes: [{ name: 'claude', argv: ['claude', '--permission-mode', 'bypassPermissions', '--resume', 'viejo', '--model', 'opus'] }] } } }), stderr: '' } }
+    if (a[0] === 'grep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
+    if (a[0] === 'sh' && a[2]?.startsWith('setsid')) spawned.push(a)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const exits: number[] = []
+  on('command.run', { command: 'exit' }, async () => (exits.push(1), { text: '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.drawn()
+  // Con texto escrito en el prompt no cierra nada y lo avisa ahí mismo.
+  screen = 'algo\n❯\xa0un pedido a medio escribir   │ NERV\n'
+  await m.press({ key: 'mdl-nan/qwen3.8-flash' })
+  await m.press({ key: 'mdl-swap' })
+  for (let i = 0; i < 30 && !JSON.stringify(await m.drawn()).includes('texto en el prompt'); i++) await new Promise((r) => setTimeout(r, 10))
+  expect(JSON.stringify(await m.drawn())).toContain('texto en el prompt')
+  expect(exits).toEqual([])
+  screen = 'algo\n❯\xa0Try "fix typecheck errors"      │ NERV\n'
+  await m.press({ key: 'mdl-swap' })
+  for (let i = 0; i < 50 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(exits).toEqual([1])
+  expect(spawned.length).toBe(1)
+  const [, , , , pane, cmd] = spawned[0]!
+  expect(pane).toBe('w1:p1')
+  expect(cmd).toContain('--resume s1 --model nan/qwen3.8-flash')
+  expect(cmd).not.toContain('--fork-session')
+  expect(cmd).toContain("'--permission-mode' 'bypassPermissions'")
+  expect(cmd).not.toContain('viejo')
+})
+
+test('MODELOS: flags que se repiten al reabrir y prompt vacío leído de la pantalla', () => {
+  expect(keepFlags(['claude', '--plugin-dir', '/a b', '--resume', 'x', '--fork-session', '--model', 'opus', '--settings', '{}', '-c', "--append-system-prompt=it's"])).toBe("'--plugin-dir' '/a b' '--append-system-prompt=it\\'s'")
+  expect(promptDraft('x\n❯\xa0Try "fix typecheck errors"   │ NERV\n')).toBe('')
+  expect(promptDraft('x\n❯\xa0\n')).toBe('')
+  expect(promptDraft('❯ hola mundo      │ ◇ NERV')).toBe('hola mundo')
+  expect(promptDraft('sin prompt a la vista')).toBe('?')
+  const sid = '0b7c1d2e-1111-2222-3333-444455556666'
+  const here = mdlLaunchCmd({ id: 'nan/qwen3.8-flash', sid, keyHelper: '/h/k', fork: false, extra: "'--permission-mode' 'bypassPermissions'" })
+  expect(here).toContain(`'--permission-mode' 'bypassPermissions' --resume ${sid} --model nan/qwen3.8-flash`)
+  expect(here).not.toContain('--fork-session')
+  expect(mdlLaunchCmd({ sid, keyHelper: '/h/k', fork: false })).toContain('-u CLAUDE_CODE_MAX_CONTEXT_TOKENS')
+  expect(mdlGroups(['ds/deepseek-v4-pro', 'nan/deepseek-v4-flash']).map((g) => g.label)).toEqual(['NaN', 'DeepSeek (API oficial)'])
 })
 
 test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el default de settings.json', async ($, on) => {

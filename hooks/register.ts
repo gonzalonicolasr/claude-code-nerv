@@ -2801,7 +2801,7 @@ export const mdlGroups = (ids: readonly string[], emails: Record<string, string>
     const key = prefix ? 'p:' + prefix : mdlFamily(name)
     if (!by.has(key)) {
       const who = emails[prefix] ? ' · ' + emails[prefix].split('@')[0] : ''
-      const label = prefix === 'nan' ? 'NaN' : prefix === 'refuseless' ? 'Refuseless (abliterated)' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
+      const label = prefix === 'nan' ? 'NaN' : prefix === 'ds' ? 'DeepSeek (API oficial)' : prefix === 'refuseless' ? 'Refuseless (abliterated)' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
       by.set(key, { key: prefix ? prefix : key, label, prefix, models: [] })
     }
     by.get(key)!.models.push(id)
@@ -2833,17 +2833,63 @@ export const cpamContexts = (yaml: string) => {
   }
   return out
 }
-export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; configDir?: string; ctx?: number }) => {
+// `fork: false` es para reabrir en el mismo pane: el proceso viejo ya salió, así que se retoma la
+// misma conversación. `extra` son los flags del arranque original, ya entrecomillados (keepFlags).
+export const mdlLaunchCmd = (o: { id?: string; sid?: string; keyHelper: string; configDir?: string; ctx?: number; fork?: boolean; extra?: string }) => {
   const safe = (s: string) => /^[\w.@:/+-]+$/.test(s)
   if ((o.sid && !safe(o.sid)) || !safe(o.keyHelper) || (o.id && !safe(o.id)) || (o.configDir && !safe(o.configDir))) return ''
   const cfg = o.configDir ? ` CLAUDE_CONFIG_DIR=${o.configDir}` : ''
+  const extra = o.extra ? ' ' + o.extra : ''
   // Sin sid (la conversación todavía no tiene transcript): sesión nueva con ese modelo.
-  const resume = o.sid ? ` --resume ${o.sid} --fork-session` : ''
-  if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${cfg} claude${resume}`
+  const resume = o.sid ? ` --resume ${o.sid}${o.fork === false ? '' : ' --fork-session'}` : ''
+  if (!o.id) return `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_MAX_CONTEXT_TOKENS${cfg} claude${extra}${resume}`
   // Claude Code asume 200k para un id que no conoce: se le declara el contexto real.
   const ctx = o.ctx && Number.isInteger(o.ctx) && o.ctx > 0 ? ` CLAUDE_CODE_MAX_CONTEXT_TOKENS=${o.ctx}` : ''
-  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg}${ctx} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}'${resume} --model ${o.id}`
+  return `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL${cfg}${ctx} ANTHROPIC_BASE_URL=${CPAM_URL} claude --settings '{"apiKeyHelper":"${o.keyHelper}"}'${extra}${resume} --model ${o.id}`
 }
+// Flags del arranque original que se repiten al reabrir acá (--permission-mode, --plugin-dir…).
+// Sesión, modelo y settings los pone mdlLaunchCmd; cada valor va con comilla simple de fish.
+const KEEP_DROP_VAL = new Set(['--resume', '-r', '--session-id', '--model', '--settings'])
+const KEEP_DROP = new Set(['--fork-session', '--continue', '-c'])
+export const keepFlags = (argv: readonly string[]) => {
+  const out: string[] = []
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!
+    if (KEEP_DROP_VAL.has(a)) {
+      i++
+      continue
+    }
+    if (KEEP_DROP.has(a) || /^--(resume|session-id|model|settings)=/.test(a)) continue
+    out.push("'" + a.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'")
+  }
+  return out.join(' ')
+}
+// Lo escrito en el prompt de Claude, leído de la pantalla del pane ('' = vacío). Después de ❯ va
+// un espacio duro (\xa0); "Try …" es el placeholder del prompt vacío. La barra NERV va a la derecha
+// del mismo renglón, detrás de un │.
+export const promptDraft = (screen: string) => {
+  const line = screen.split('\n').reverse().find((l) => l.trim().startsWith('❯'))
+  if (line === undefined) return '?'
+  const text = line.split('│')[0]!.replace(/\xa0/g, ' ').trim().slice(1).trim()
+  return text.startsWith('Try "') ? '' : text
+}
+// Corre suelto (setsid) para sobrevivir al /exit: espera hasta 10 s a que el pane vuelva a la
+// shell y recién ahí tipea el comando. Si Claude no salió, no hace nada.
+const RELAUNCH_PY = `import json,subprocess,sys,time
+pane,cmd=sys.argv[1],sys.argv[2]
+def shell():
+    try:
+        r=subprocess.run(['herdr','pane','process-info','--pane',pane],capture_output=True,text=True,timeout=5)
+        ps=json.loads(r.stdout)['result']['process_info']['foreground_processes']
+        return bool(ps) and all(p.get('name') in ('fish','bash','zsh','sh') for p in ps)
+    except Exception:
+        return False
+for _ in range(40):
+    time.sleep(0.25)
+    if shell():
+        subprocess.run(['herdr','pane','run',pane,cmd],capture_output=True,timeout=10)
+        break
+`
 // Dónde guarda Claude Code el transcript: projects/<cwd con todo lo no alfanumérico -> '-'>/<sid>.jsonl
 export const transcriptPath = (base: string, cwd: string, sid: string) => `${base}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sid}.jsonl`
 
@@ -2914,6 +2960,8 @@ let mdlCpam = false
 let mdlQuery = ''
 let mdlPick = ''
 let mdlNote = ''
+// A qué modelo se refiere mdlNote: se muestra en su grupo, donde se hizo click ('' = arriba).
+let mdlNoteFor = ''
 let mdlSig = ''
 let directEmail = ''
 let ctxEnv = ''
@@ -2991,8 +3039,7 @@ async function refreshModels($: any, force = false) {
   }
 }
 
-async function relaunchWith($: any, id: string) {
-  const wsId = String((await $.env.get('HERDR_WORKSPACE_ID').catch(() => '')) || '')
+async function launchPlan($: any, id: string, fork: boolean, extra = '') {
   // El id se relee al click: tras /clear o /resume la conversación ya no es la del arranque.
   sessionId = (await $.session.id().catch(() => '')) || sessionId
   const base = configDir || `${home}/.claude`
@@ -3001,7 +3048,37 @@ async function relaunchWith($: any, id: string) {
   const hasTranscript = !!sessionId && !!cwdNow &&
     (await $.process.run(['grep', '-qm1', '"type":"user"', transcriptPath(base, cwdNow, sessionId)], { timeoutMs: 5000 }).catch(() => undefined))?.exitCode === 0
   const ctx = id ? cpamContexts((await $.fs.read(`${home}/.cli-proxy-api/config.yaml`).catch(() => '')) || '')[id] : undefined
-  const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, ctx, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
+  const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, ctx, fork, extra, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
+  return { cmd, hasTranscript }
+}
+
+// Cambia el modelo en el mismo pane: cierra este Claude (/exit) y un ayudante suelto retoma la
+// misma conversación ahí con el modelo nuevo. Si el /exit no llega en 10 s, todo queda como estaba.
+async function relaunchHere($: any, id: string) {
+  mdlNoteFor = id
+  const say = (s: string) => ((mdlNote = s), $.ui.invalidate('ui.render'))
+  if (working) return say('⚠ esperá a que termine el turno')
+  if (!paneId) return say('⚠ sólo se puede dentro de herdr')
+  const screen = (await $.process.run(['herdr', 'pane', 'read', paneId, '--source', 'visible', '--format', 'text'], { timeoutMs: 5000 }).catch(() => undefined))?.stdout || ''
+  if (promptDraft(String(screen))) return say('⚠ tenés texto en el prompt: mandalo o borralo y volvé a tocar')
+  const info = await herdrJson($, ['pane', 'process-info', '--pane', paneId])
+  const cl = (info?.process_info?.foreground_processes || []).find((p: any) => p?.name === 'claude')
+  const { cmd, hasTranscript } = await launchPlan($, id, false, cl?.argv ? keepFlags(cl.argv) : '')
+  if (!cmd || !cwdNow) return say('⚠ no sé el id o la carpeta de esta sesión')
+  const run = await $.process
+    .run(['sh', '-c', 'setsid -f python3 -c "$0" "$1" "$2" >/dev/null 2>&1 </dev/null', RELAUNCH_PY, paneId, cmd], { timeoutMs: 5000 })
+    .catch(() => undefined)
+  if (run?.exitCode !== 0) return say('⚠ no pude lanzar el ayudante: quedó como estaba')
+  say(hasTranscript ? 'cerrando y reabriendo acá…' : 'cerrando y abriendo acá (sesión nueva: esta todavía no tiene historial)…')
+  // Si este proceso sigue vivo pasados los 10 s del ayudante, el /exit no llegó.
+  setTimeout(() => say('⚠ el /exit no llegó en 10 s: quedó como estaba'), 11000)
+  await $.command.run({ command: 'exit' }).catch((err: any) => say('⚠ no pude cerrar: ' + clip(String(err?.message || err), 50)))
+}
+
+async function relaunchWith($: any, id: string) {
+  mdlNoteFor = id
+  const wsId = String((await $.env.get('HERDR_WORKSPACE_ID').catch(() => '')) || '')
+  const { cmd, hasTranscript } = await launchPlan($, id, true)
   mdlNote = !wsId || !paneId ? 'sólo se puede dentro de herdr' : !cmd || !cwdNow ? 'no sé el id o la carpeta de esta sesión' : 'abriendo tab nueva…'
   $.ui.invalidate('ui.render')
   if (mdlNote !== 'abriendo tab nueva…') return
@@ -3015,6 +3092,7 @@ async function relaunchWith($: any, id: string) {
 }
 
 async function useHere($: any, id: string) {
+  mdlNoteFor = id
   mdlNote = `cambiando a ${id}…`
   $.ui.invalidate('ui.render')
   // /model además guarda el id como default de TODAS las sesiones nuevas; un id del CPAM ahí
@@ -3088,20 +3166,31 @@ function drawModels($: any, e: any, out: any[], h: any) {
     Box({
       key: 'mdl-ctl',
       flexDirection: 'row',
+      flexWrap: 'wrap',
       columnGap: 1,
       children: [
         chip('mdl-refresh', mdl.busy ? '◌ leyendo' : '↻ refrescar', true, C.tabBg, () => void refreshModels($, true)),
         ...(mdlQuery ? [chip('mdl-clear', '✕ filtro', true, C.tabBg, () => ((mdlQuery = ''), $.ui.invalidate('ui.render')))] : []),
-        ...(mdlCpam ? [chip('mdl-back', '↩ volver a Anthropic', true, C.tabBg, () => void relaunchWith($, ''))] : []),
+        ...(mdlCpam
+          ? [
+              chip('mdl-back', '↩ volver a Anthropic', true, C.tabBg, () => void relaunchHere($, '')),
+              chip('mdl-back-tab', '⧉ en tab nueva', true, C.chipDim, () => void relaunchWith($, '')),
+            ]
+          : []),
       ],
     }),
   ]
-  if (mdlNote) head.push(t([span(mdlNote, mdlNote.startsWith('✓') ? C.lime : C.amber)]))
+  const note = () => t([span(mdlNote, mdlNote.startsWith('✓') ? C.lime : mdlNote.startsWith('⚠') || mdlNote.startsWith('✖') ? C.amber : C.muted)], undefined, { wrap: 'wrap' })
+  // El resultado se muestra donde se hizo click: arriba sólo lo de "volver a Anthropic".
+  const noteIn = (ids: readonly string[]) => !!mdlNote && !!mdlNoteFor && ids.includes(mdlNoteFor)
+  if (mdlNote && !noteIn(mdl.ids)) head.push(note())
   out.push(card('mdl-head', '◈ MODELOS · CPAM', C.purple, head))
-  if (mdlPick) {
-    const dim = mdlDim(mdlPick)
-    const rows: any[] = []
-    if (mdlSplit(mdlPick).prefix === 'wibond') rows.push(t([span('⚠ usa la cuenta de TRABAJO (Wibond)', C.red, { bold: true })]))
+  // Las acciones del modelo elegido van adentro de su grupo, justo debajo de la lista: no hay que
+  // subir a buscarlas y lo de arriba no se corre al elegir.
+  const pickRows = (id: string) => {
+    const dim = mdlDim(id)
+    const rows: any[] = [t([span('▶ ', C.lime, { bold: true }), span(clip(id, w - 4), C.text, { bold: true })])]
+    if (mdlSplit(id).prefix === 'wibond') rows.push(t([span('⚠ usa la cuenta de TRABAJO (Wibond)', C.red, { bold: true })]))
     if (dim) rows.push(t([span(`⚠ ${dim === 'no chat' ? 'no es un modelo de chat' : 'antes falló en Claude Code: ' + dim}`, C.amber)]))
     rows.push(
       Box({
@@ -3110,18 +3199,19 @@ function drawModels($: any, e: any, out: any[], h: any) {
         flexWrap: 'wrap',
         columnGap: 1,
         children: [
-          ...(mdlCpam ? [chip('mdl-here', '▶ usar acá (/model)', true, C.tabBg, () => void useHere($, mdlPick))] : []),
-          chip('mdl-reopen', mdlCpam ? '⟳ en tab nueva' : '⟳ reabrir esta sesión con este modelo', true, C.tabBg, () => void relaunchWith($, mdlPick)),
+          mdlCpam ? chip('mdl-here', '▶ usar acá (/model)', true, C.tabBg, () => void useHere($, id)) : chip('mdl-swap', '⟳ cambiar acá', true, C.tabBg, () => void relaunchHere($, id)),
+          chip('mdl-reopen', '⧉ en tab nueva', true, C.chipDim, () => void relaunchWith($, id)),
           chip('mdl-cancel', '✕', true, C.chipDim, () => ((mdlPick = ''), $.ui.invalidate('ui.render'))),
         ],
       }),
     )
-    out.push(card('mdl-pick', '▶ ' + clip(mdlPick, w - 6), mdlSplit(mdlPick).prefix === 'wibond' ? C.red : C.lime, rows))
+    return rows
   }
   for (const g of groups) {
-    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : g.prefix === 'refuseless' ? C.pink : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
+    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : g.prefix === 'ds' ? C.amber : g.prefix === 'refuseless' ? C.pink : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
+    const picked = mdlPick && g.models.includes(mdlPick) ? mdlPick : ''
     out.push(
-      card('mdl-' + g.key, `${g.label}${g.prefix ? ' · ' + g.prefix + '/' : ''} (${g.models.length})`, color, [
+      card('mdl-' + g.key, `${g.label}${g.prefix ? ' · ' + g.prefix + '/' : ''} (${g.models.length})`, picked && mdlSplit(picked).prefix === 'wibond' ? C.red : color, [
         Box({
           key: 'mdl-list-' + g.key,
           flexDirection: 'row',
@@ -3133,15 +3223,18 @@ function drawModels($: any, e: any, out: any[], h: any) {
             return Box({
               key: 'mdlbox-' + id,
               backgroundColor: mdlPick === id ? C.tabBg : undefined,
-              children: [Button({ key: 'mdl-' + id, label: (on ? '◆ ' : '') + mdlSplit(id).name + (MDL_BROKEN[id] ? ' ⚠' : ''), plain: true, dimColor: off && !on, onPress: () => ((mdlPick = id), (mdlNote = ''), $.ui.invalidate('ui.render')) })],
+              // Tocar de nuevo el elegido lo suelta.
+              children: [Button({ key: 'mdl-' + id, label: (on ? '◆ ' : '') + mdlSplit(id).name + (MDL_BROKEN[id] ? ' ⚠' : ''), plain: true, dimColor: off && !on, onPress: () => ((mdlPick = mdlPick === id ? '' : id), (mdlNote = ''), (mdlNoteFor = ''), $.ui.invalidate('ui.render')) })],
             })
           }),
         }),
+        ...(picked ? pickRows(picked) : []),
+        ...(noteIn(g.models) ? [note()] : []),
       ]),
     )
   }
   if (total && !groups.length) out.push(t([span(`nada coincide con "${mdlQuery}"`, C.dim)]))
-  out.push(t([span(mdlCpam ? '/model cambia acá; "volver a Anthropic" reabre en tab nueva (fork)' : 'sesión directa a Anthropic: el proveedor no cambia en vivo, se reabre en tab nueva (fork)', C.dim)], C.dim, { wrap: 'wrap' }))
+  out.push(t([span(mdlCpam ? '"usar acá" cambia con /model; "volver a Anthropic" cierra y reabre esta conversación en el mismo pane' : '"cambiar acá" cierra este Claude y reabre la misma conversación en el mismo pane; "en tab nueva" abre un fork al lado', C.dim)], C.dim, { wrap: 'wrap' }))
 }
 
 function drawForge($: any, e: any, out: any[], h: any) {

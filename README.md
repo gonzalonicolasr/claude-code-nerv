@@ -42,6 +42,16 @@ abiertas y lo que pliegues queda guardado).
 - **4 · EN VIVO:** la StreamCam y el iPhone en miniatura con los botones para abrir los overlays, cambiar la banda y tapar la cámara; de Discord, sólo quiénes te miran mientras estás en Go Live y el chat del canal de voz.
 - **5 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
   botón para iniciar una corrida.
+- **9 · MODELOS:** los modelos del CPAM agrupados por cuenta (NaN, DeepSeek API oficial, Claude,
+  Codex/GPT, Google ag…ag9, Wibond al final en rojo), con filtro. Al tocar un modelo, sus botones
+  aparecen ahí mismo, debajo de su grupo, y el resultado también; tocarlo de nuevo lo suelta.
+  - **Sesión por el CPAM:** "usar acá" cambia con `/model`, sin reabrir.
+  - **Sesión directa a Anthropic:** "cambiar acá" cierra este Claude (`/exit`) y un ayudante suelto
+    (`setsid`) espera a que el pane vuelva a la shell y retoma **la misma conversación en el mismo
+    pane** con el modelo nuevo, los mismos flags y el contexto real del modelo. "↩ volver a
+    Anthropic" hace lo mismo al revés. Si hay texto escrito en el prompt o el turno está corriendo,
+    no cierra nada; si el `/exit` no llega en 10 s, queda todo como estaba.
+  - **"en tab nueva"** abre un fork de la conversación en otra tab de herdr y deja esta abierta.
 
 Además, el spinner de "pensando" se reemplaza por un escáner animado con verbos EVA
 ("Sincronizando", "Consultando a MAGI"…) y el `SYNC` de contexto. Cuando un comando que fallaba
@@ -118,11 +128,3 @@ claude plugin test .
 
 Mientras lo usás con `--plugin-dir`, Claude Code lo recarga solo cada vez que guardás
 `hooks/register.ts`.
-
-## Pendientes
-
-- **Cambiar de modelo sin abrir otra tab.** Hoy "reabrir con este modelo" abre una tab
-  nueva de herdr con un fork de la conversación. Lo que se quiere es cambiar y refrescar en
-  el mismo lugar. Una forma posible: cerrar este Claude (`/exit`) y correr el comando en el
-  mismo pane (`herdr pane run $HERDR_PANE_ID …`). Hay que confirmar que el `/exit` llegue
-  antes que el comando y que el pane no se cierre al salir Claude. (pedido 2026-10-20)
