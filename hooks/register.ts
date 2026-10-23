@@ -3191,6 +3191,8 @@ function drawModels($: any, e: any, out: any[], h: any) {
     const dim = mdlDim(id)
     const rows: any[] = [t([span('▶ ', C.lime, { bold: true }), span(clip(id, w - 4), C.text, { bold: true })])]
     if (mdlSplit(id).prefix === 'wibond') rows.push(t([span('⚠ usa la cuenta de TRABAJO (Wibond)', C.red, { bold: true })]))
+    // Refuseless contesta 400 a cualquier pedido con una imagen, y la imagen queda en el historial.
+    if (mdlSplit(id).prefix === 'refuseless') rows.push(t([span('⚠ no ve imágenes: si la conversación tiene una, cada mensaje da 400', C.amber)], undefined, { wrap: 'wrap' }))
     if (dim) rows.push(t([span(`⚠ ${dim === 'no chat' ? 'no es un modelo de chat' : 'antes falló en Claude Code: ' + dim}`, C.amber)]))
     rows.push(
       Box({
