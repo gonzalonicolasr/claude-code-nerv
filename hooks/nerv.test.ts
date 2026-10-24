@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1096,4 +1096,69 @@ test('EN VIVO: el chat tiene alto fijo con scroll adentro y las cámaras entran 
   expect(drawn).toContain('piloto7')
   for (const x of ['STREAMCAM', 'IPHONE', 'MIRAN', 'asuka, rei']) expect(drawn).toContain(x)
   expect(drawn).not.toContain('body-bar')
+})
+
+
+test('eddStory arma el progreso de la historia y las decisiones pendientes', () => {
+  const entries = [
+    { type: 'story_opened', presence: 'async', payload: { n: 1, text: 'login con token', storyIndex: 1 } },
+    { type: 'pact_proposed', payload: { tests: [{ name: 'rechaza token vencido', level: 'endpoint' }, { name: 'acepta token válido', level: 'endpoint' }], demo: [] } },
+    { type: 'pact_approved', payload: {} },
+    { type: 'test_sealed', payload: { name: 'rechaza token vencido', file: 'a.test.ts', sha256: 'x' } },
+    { type: 'step_opened', payload: { test: 'rechaza token vencido' } },
+    { type: 'step_closed', payload: { test: 'rechaza token vencido' } },
+    { type: 'test_sealed', payload: { name: 'acepta token válido', file: 'a.test.ts', sha256: 'y' } },
+    { type: 'step_opened', payload: { test: 'acepta token válido' } },
+    { type: 'decision_queued', payload: { id: 'd1', kind: 'dependency', question: '¿sumo jsonwebtoken?', suggested: 'sí' } },
+    { type: 'demo_run', payload: { exit: 0 } },
+    { type: 'perito_report', payload: { findings: [{}], seals_ok: true, suite: { green: true } } },
+  ]
+  const v = eddStory(entries)
+  expect(v.title).toBe('login con token')
+  expect(v.n).toBe(1)
+  expect(v.approved).toBe(true)
+  expect(v.open).toBe(true)
+  expect(v.tests).toEqual({ total: 2, green: 1, sealed: 1, pending: 0 })
+  expect(v.openStep).toBe('acepta token válido')
+  expect(v.decisions.map((d) => d.id)).toEqual(['d1'])
+  expect(v.demo).toBe(0)
+  expect(v.perito).toEqual({ findings: 1, sealsOk: true, green: true })
+  expect(v.presence).toBe('async')
+})
+
+test('eddStory: una decisión respondida sale de pendientes y sin pacto da totales en cero', () => {
+  const v = eddStory([
+    { type: 'story_opened', payload: { text: 's' } },
+    { type: 'decision_queued', payload: { id: 'd1', kind: 'size', question: '¿waiver?' } },
+    { type: 'decision_answered', payload: { id: 'd1', answer: 'allow' } },
+    { type: 'story_closed', payload: {} },
+  ])
+  expect(v.decisions).toEqual([])
+  expect(v.open).toBe(false)
+  expect(v.tests.total).toBe(0)
+})
+
+test('eddParse salta líneas rotas y eddCounts/eddActiveSlug leen el índice', () => {
+  const idx = [
+    JSON.stringify({ type: 'story_opened', payload: { slug: 'uno', storyIndex: 1 } }),
+    'basura {no json',
+    JSON.stringify({ type: 'story_closed', payload: { slug: 'uno' } }),
+    JSON.stringify({ type: 'story_opened', payload: { slug: 'dos', storyIndex: 2 } }),
+  ].join('\n')
+  const entries = eddParse(idx)
+  expect(entries.length).toBe(3)
+  expect(eddCounts(entries)).toEqual({ opened: 2, closed: 1 })
+  expect(eddActiveSlug(entries)).toBe('dos')
+})
+
+test('la barra incluye la pestaña EDD', async ($) => {
+  const m: any = await ($ as any).ui.mount({
+    plugin: 'nerv',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'nerv',
+    props: { title: 'NERV', isFocused: false, bodyColumns: 44, placement: 'dock', scroll: { offset: 0, bodyRows: 40, contentRows: 40 }, view: {} },
+  })
+  const text = JSON.stringify(await m.drawn())
+  expect(text).toContain('EDD')
 })

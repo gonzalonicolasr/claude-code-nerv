@@ -47,6 +47,7 @@ const TABS = [
   { id: 'cortex', label: 'CORTEX', hotkey: '7' },
   { id: 'yt', label: 'YOUTUBE', hotkey: '8' },
   { id: 'models', label: 'MODELOS', hotkey: '9' },
+  { id: 'edd', label: 'EDD', hotkey: '0' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -64,6 +65,7 @@ let turnStart = 0
 let model = ''
 let project = ''
 let cwdNow = ''
+let gitRoot = ''
 let branch = ''
 let home = ''
 let paneId = ''
@@ -150,6 +152,7 @@ let effortFrom = 0
 let effortAt = 0
 let forge: any = undefined
 let nodd: any = undefined
+let edd: any = undefined
 let cortex: { stats?: any; recent?: any[]; err?: string; at?: number } = {}
 let blue = { ars: 1555, live: false, at: 0 }
 type YtItem = { id: string; title: string; ch: string; d: number }
@@ -578,6 +581,8 @@ async function refreshLocal($: any) {
   model = await $.session.model().catch(() => model)
   const b = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 5000 }).catch(() => undefined)
   branch = b?.exitCode === 0 ? b.stdout.trim() : ''
+  const tl = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 5000 }).catch(() => undefined)
+  gitRoot = tl?.exitCode === 0 ? tl.stdout.trim() : ''
   const em = await $.process.run(['git', 'config', 'user.email'], { cwd, timeoutMs: 5000 }).catch(() => undefined)
   const email = em?.exitCode === 0 ? em.stdout.trim() : ''
   const lg = await $.process
@@ -867,6 +872,7 @@ function startFast($: any) {
       if (tab === 'live' && frame % 12 === 0) void refreshLive($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
       if (tab === 'nodd' && frame % 16 === 0) refreshNodd($)
+      if (tab === 'edd' && frame % 16 === 0) void refreshEdd($)
       if (tab === 'cortex' && frame % 960 === 0) refreshCortex($)
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (tab === 'models' && frame % 480 === 0) void refreshModels($)
@@ -1217,6 +1223,7 @@ function draw($: any, e: any) {
     if (x.id === 'live') void refreshLive($)
     if (x.id === 'forge') refreshForge($)
     if (x.id === 'nodd') refreshNodd($)
+    if (x.id === 'edd') void refreshEdd($)
     if (x.id === 'cortex') refreshCortex($)
     if (x.id === 'yt') ytPoll($)
     if (x.id === 'models') void refreshModels($)
@@ -1500,6 +1507,7 @@ function draw($: any, e: any) {
   }
 
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
+  if (tab === 'edd') drawEdd($, e, out, { t, span, card, scard, chip, w })
   if (tab === 'models') drawModels($, e, out, { t, span, card, chip, w })
 
   if (tab === 'yt') {
@@ -2187,6 +2195,7 @@ function enterTab($: any, id: string) {
   if (id === 'live') void refreshLive($)
   if (id === 'forge') refreshForge($)
   if (id === 'nodd') refreshNodd($)
+  if (id === 'edd') void refreshEdd($)
   if (id === 'cortex') refreshCortex($)
   if (id === 'yt') ytPoll($)
 }
@@ -2247,6 +2256,170 @@ async function setTheme($: any, id: string) {
   }
   $.ui.invalidate('ui.render')
   return true
+}
+
+export type EddDecision = { id: string; kind: string; question: string; suggested?: string; test?: string }
+export type EddView = {
+  slug: string
+  title: string
+  n: number | null
+  open: boolean
+  approved: boolean
+  tests: { total: number; green: number; sealed: number; pending: number }
+  openStep: string
+  decisions: EddDecision[]
+  demo: number | 'timeout' | null
+  perito: { findings: number; sealsOk: boolean; green: boolean } | null
+  presence: string
+}
+export const eddParse = (raw: unknown): any[] =>
+  (typeof raw === 'string' ? raw.split('\n') : [])
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      try {
+        return JSON.parse(l)
+      } catch {
+        return null
+      }
+    })
+    .filter(Boolean)
+export const eddCounts = (index: readonly any[]) => {
+  const closed = new Set<string>()
+  let opened = 0
+  for (const e of index) {
+    if (e?.type === 'story_opened') opened++
+    else if (e?.type === 'story_closed' && e.payload?.slug) closed.add(e.payload.slug)
+  }
+  return { opened, closed: closed.size }
+}
+export const eddActiveSlug = (index: readonly any[]): string => {
+  const closed = new Set<string>()
+  const opened: string[] = []
+  for (const e of index) {
+    if (e?.type === 'story_opened' && e.payload?.slug) opened.push(e.payload.slug)
+    else if (e?.type === 'story_closed' && e.payload?.slug) closed.add(e.payload.slug)
+  }
+  for (let i = opened.length - 1; i >= 0; i--) if (!closed.has(opened[i]!)) return opened[i]!
+  return opened[opened.length - 1] || ''
+}
+export const eddStory = (entries: readonly any[]): EddView => {
+  const v: EddView = { slug: '', title: '', n: null, open: true, approved: false, tests: { total: 0, green: 0, sealed: 0, pending: 0 }, openStep: '', decisions: [], demo: null, perito: null, presence: '' }
+  const tests = new Map<string, { status: string }>()
+  const unseals = new Map<string, string>()
+  const queued = new Map<string, EddDecision>()
+  const answered = new Set<string>()
+  for (const e of entries) {
+    const p = (e && e.payload) || {}
+    switch (e?.type) {
+      case 'story_opened':
+        v.title = p.text || p.title || v.title
+        v.n = typeof p.n === 'number' ? p.n : v.n
+        if (e.presence) v.presence = e.presence
+        break
+      case 'pact_proposed':
+        tests.clear()
+        for (const x of p.tests || []) if (x?.name) tests.set(x.name, { status: 'pending' })
+        break
+      case 'pact_approved':
+        v.approved = true
+        break
+      case 'pact_changed':
+        if (p.op === 'add' && p.name && !tests.has(p.name)) tests.set(p.name, { status: 'pending' })
+        else if (p.op === 'drop' && p.name) tests.delete(p.name)
+        break
+      case 'test_sealed': {
+        if (p.kind === 'demo') break
+        const x = tests.get(p.name)
+        if (x) x.status = 'sealed'
+        break
+      }
+      case 'step_opened':
+        if (p.test) v.openStep = p.test
+        break
+      case 'step_closed': {
+        const x = tests.get(p.test)
+        if (x) x.status = 'green'
+        if (v.openStep === p.test) v.openStep = ''
+        break
+      }
+      case 'test_unsealed':
+        if (typeof p.decisionId === 'string') unseals.set(p.decisionId, p.name)
+        else {
+          const x = tests.get(p.name)
+          if (x) x.status = 'pending'
+        }
+        break
+      case 'decision_queued':
+        if (p.id) queued.set(p.id, { id: p.id, kind: p.kind || '?', question: p.question || '', suggested: p.suggested, test: p.test })
+        break
+      case 'decision_answered':
+        if (p.id) answered.add(p.id)
+        if (p.answer === 'allow') {
+          const nm = unseals.get(p.id)
+          const x = nm ? tests.get(nm) : undefined
+          if (x) x.status = 'pending'
+        }
+        break
+      case 'demo_run':
+        v.demo = p.exit ?? null
+        break
+      case 'perito_report':
+        v.perito = { findings: Array.isArray(p.findings) ? p.findings.length : 0, sealsOk: !!p.seals_ok, green: !!(p.suite && p.suite.green) }
+        break
+      case 'presence_changed':
+        if (p.to) v.presence = p.to
+        break
+      case 'story_closed':
+        v.open = false
+        break
+    }
+  }
+  const list = [...tests.values()]
+  v.tests = {
+    total: list.length,
+    green: list.filter((x) => x.status === 'green').length,
+    sealed: list.filter((x) => x.status === 'sealed').length,
+    pending: list.filter((x) => x.status === 'pending').length,
+  }
+  v.decisions = [...queued.values()].filter((d) => !answered.has(d.id))
+  return v
+}
+
+async function refreshEdd($: any) {
+  const root = gitRoot || cwdNow
+  if (!root) {
+    edd = undefined
+    return
+  }
+  const idxRaw = await $.fs.read(`${root}/.edd/index.jsonl`).catch(() => undefined)
+  if (typeof idxRaw !== 'string') {
+    edd = { present: false }
+    return
+  }
+  const index = eddParse(idxRaw)
+  const counts = eddCounts(index)
+  const activeOnBranch = branch.startsWith('edd/')
+  const slug = activeOnBranch ? branch.slice('edd/'.length) : eddActiveSlug(index)
+  let view: EddView | null = null
+  if (slug) {
+    const raw = await $.fs.read(`${root}/.edd/stories/${slug}/ledger.jsonl`).catch(() => undefined)
+    if (typeof raw === 'string') {
+      view = eddStory(eddParse(raw))
+      view.slug = slug
+    }
+  }
+  let presence = view?.presence || ''
+  let approvals = ''
+  const cfgRaw = await $.fs.read(`${root}/edd.config.json`).catch(() => undefined)
+  if (typeof cfgRaw === 'string') {
+    try {
+      const cfg = JSON.parse(cfgRaw)
+      presence = cfg.presence || presence
+      approvals = cfg.approvals || ''
+    } catch {}
+  }
+  edd = { present: true, counts, view, presence, approvals, activeOnBranch, at: now() }
 }
 
 async function refreshForge($: any) {
@@ -3237,6 +3410,70 @@ function drawModels($: any, e: any, out: any[], h: any) {
   }
   if (total && !groups.length) out.push(t([span(`nada coincide con "${mdlQuery}"`, C.dim)]))
   out.push(t([span(mdlCpam ? '"usar acá" cambia con /model; "volver a Anthropic" cierra y reabre esta conversación en el mismo pane' : '"cambiar acá" cierra este Claude y reabre la misma conversación en el mismo pane; "en tab nueva" abre un fork al lado', C.dim)], C.dim, { wrap: 'wrap' }))
+}
+
+function drawEdd($: any, e: any, out: any[], h: any) {
+  const { Box } = $.ui.resolve(e)
+  const { t, span, card, scard, w } = h
+  const expl = () =>
+    card('edd-what', '✒ EDD', C.violet, [
+      t([span('TDD con dos roles: ', C.text), span('Testigo', C.cyan, { bold: true }), span(' sella los tests, ', C.text), span('Perito', C.pink, { bold: true }), span(' revisa.', C.text)]),
+      t([span('/edd:backlog', C.lime), span(' charla → BACKLOG.md', C.dim)]),
+      t([span('/edd:story N', C.lime), span(' arranca; frena 1 vez (tests + decisiones), después solo', C.dim)]),
+      t([span('tests → código → demo → revisión del Perito', C.muted)]),
+      t([span('necesita git · Node ≥22.6 · runner (vitest/node:test)', C.dim)]),
+      t([span('los tests sellados no se editan a mano: los frena un hook de git', C.dim)]),
+    ])
+  if (!edd || !edd.present) {
+    out.push(expl())
+    if (edd && edd.present === false) out.push(card('edd-init', '◎ sin inicializar', C.dim, [t([span('este repo no tiene .edd/', C.muted)]), t([span('arrancalo con ', C.dim), span('edd init', C.cyan)])]))
+    return
+  }
+  const c = edd.counts || { opened: 0, closed: 0 }
+  out.push(
+    Box({
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginRight: 2,
+      children: [
+        t([span(' ✒ EDD ', C.ink, { bold: true, backgroundColor: C.violet }), ...(edd.presence ? [span(`  ${edd.presence}`, C.cyan, { bold: true })] : []), ...(edd.approvals ? [span(` · ${edd.approvals}`, C.muted)] : [])]),
+        t([span(` ${c.closed}✓ `, C.lime), span(`/ ${c.opened} historias `, C.muted)]),
+      ],
+    }),
+  )
+  const v = edd.view
+  if (!v) {
+    out.push(card('edd-none', '◎ sin historia activa', C.muted, [t([span(edd.activeOnBranch ? 'branch edd/ sin ledger todavía' : 'no estás en un branch edd/…', C.muted)]), t([span('abrí una con ', C.dim), span('/edd:story N', C.cyan)])]))
+    out.push(expl())
+    return
+  }
+  const col = v.open ? C.lime : C.muted
+  out.push(
+    card('edd-story', (v.open ? '◆ ' : '◇ ') + 'HISTORIA', col, [
+      t([span(clip(v.title || v.slug, w - 8), C.text, { bold: true }), ...(v.n != null ? [span(`  #${v.n}`, C.dim)] : [])]),
+      Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t([span(clip(v.slug, w - 10), C.muted)]), t([span(v.open ? 'abierta' : 'cerrada', col, { bold: true })])] }),
+    ]),
+  )
+  const tt = v.tests || { total: 0, green: 0, sealed: 0, pending: 0 }
+  const pct = tt.total ? Math.round((tt.green / tt.total) * 100) : 0
+  const rows: any[] = []
+  rows.push(Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t([span('PACTO ', C.muted), span(v.approved ? 'aprobado' : 'propuesto', v.approved ? C.lime : C.amber, { bold: true })]), t([span(`${tt.green}/${tt.total} verdes`, heat(100 - pct))])] }))
+  if (tt.total) rows.push(t([span(dots(pct, w), v.approved ? C.lime : C.violet)]))
+  rows.push(t([span(`✔ ${tt.green} verdes · ◼ ${tt.sealed} sellados · ○ ${tt.pending} pendientes`, C.dim)]))
+  if (v.openStep) rows.push(t([span('▶ paso abierto: ', C.orange), span(clip(v.openStep, w - 16), C.text)]))
+  const demo = v.demo
+  rows.push(Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t([span('DEMO', C.muted)]), t([span(demo == null ? 'sin correr' : demo === 'timeout' ? 'timeout' : demo === 0 ? 'ok' : `exit ${demo}`, demo === 0 ? C.lime : demo == null ? C.dim : C.red, { bold: demo != null })])] }))
+  const per = v.perito
+  rows.push(Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t([span('PERITO', C.muted)]), t([per ? span(`${per.findings} obs · seals ${per.sealsOk ? 'ok' : 'ROTO'} · suite ${per.green ? 'verde' : 'ROJA'}`, per.sealsOk && per.green ? C.lime : C.amber) : span('sin revisar', C.dim)])] }))
+  out.push(scard('edd-prog', '◢ PROGRESO', v.open ? C.orange : C.violet, rows, 10))
+  if (v.decisions && v.decisions.length) {
+    const drows: any[] = []
+    for (const d of v.decisions) {
+      drows.push(t([span('• ', C.amber), span(`[${d.kind}] `, C.amber, { bold: true }), span(clip(d.question, w - 8), C.text)]))
+      if (d.suggested) drows.push(t([span('  sugerido: ', C.dim), span(clip(d.suggested, w - 14), C.muted)]))
+    }
+    out.push(scard('edd-dec', '⏸ TE FRENA ACÁ · decisiones', C.amber, drows, 10))
+  }
 }
 
 function drawForge($: any, e: any, out: any[], h: any) {

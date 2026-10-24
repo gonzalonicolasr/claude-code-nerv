@@ -42,6 +42,7 @@ abiertas y lo que pliegues queda guardado).
 - **4 · EN VIVO:** la StreamCam y el iPhone en miniatura con los botones para abrir los overlays, cambiar la banda y tapar la cámara; de Discord, sólo quiénes te miran mientras estás en Go Live y el chat del canal de voz.
 - **5 · FORGE:** el panel de forge: fases, perfiles, modelo y effort por fase, modo, rondas y el
   botón para iniciar una corrida.
+- **0 · EDD:** la historia activa de EDD leída del `.edd/` del repo (o de la última historia si no estás en un branch `edd/…`): el pacto (propuesto/aprobado), los tests verdes/sellados/pendientes con su barra, el paso abierto, la última demo y el informe del Perito, y las decisiones que te frenan. Sin `.edd/`, explica qué es EDD.
 - **9 · MODELOS:** los modelos del CPAM agrupados por cuenta (NaN, DeepSeek API oficial, Claude,
   Codex/GPT, Google ag…ag9, Wibond al final en rojo), con filtro. Al tocar un modelo, sus botones
   aparecen ahí mismo, debajo de su grupo, y el resultado también; tocarlo de nuevo lo suelta.
