@@ -104,7 +104,7 @@ Si tenés varios mods, separalos con `:`.
 | `/nerv prs` | Refresca las PRs |
 | `/nerv debug` | Muestra el estado interno |
 
-Con la barra enfocada, las teclas `1` a `5` cambian de pestaña. Todo lo que se ve como botón se
+Con la barra enfocada, las teclas `1` a `9` y `0` cambian de pestaña. Todo lo que se ve como botón se
 puede clickear.
 
 ## Temas
