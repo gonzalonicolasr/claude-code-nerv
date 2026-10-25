@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1149,6 +1149,72 @@ test('eddParse salta líneas rotas y eddCounts/eddActiveSlug leen el índice', (
   expect(entries.length).toBe(3)
   expect(eddCounts(entries)).toEqual({ opened: 2, closed: 1 })
   expect(eddActiveSlug(entries)).toBe('dos')
+})
+
+test('eddBacklog numera las historias, guarda el Requires y marca cerrada/abierta/pendiente', () => {
+  const md = ['# Backlog', '', '1. Como streamer, quiero ver el chat, para responder', '  2. Como streamer, quiero banear, para moderar Requires: #1', '- nota suelta', '3. Como mod, quiero un log, para auditar', '10.sin espacio no cuenta'].join('\n')
+  const index = [
+    { type: 'story_opened', payload: { n: 1, slug: 'ver-chat', text: 'x' } },
+    { type: 'story_closed', payload: { slug: 'ver-chat' } },
+    { type: 'story_opened', payload: { n: 2, slug: 'banear' } },
+  ]
+  const b = eddBacklog(md, index)
+  expect(b.map((x) => x.n)).toEqual([1, 2, 3])
+  expect(b[1]!.text).toBe('Como streamer, quiero banear, para moderar Requires: #1')
+  expect(b.map((x) => x.state)).toEqual(['closed', 'open', 'todo'])
+  expect(b[0]!.slug).toBe('ver-chat')
+  expect(b[2]!.slug).toBeUndefined()
+  expect(eddBacklog('', [])).toEqual([])
+})
+
+test('EDD: desde la barra se aprueba el pacto, se responden decisiones y se sigue la historia', async ($, on) => {
+  const index = [JSON.stringify({ type: 'story_opened', payload: { n: 2, slug: 'banear', text: 'Como streamer, quiero banear' } })].join('\n')
+  const ledger = [
+    { type: 'story_opened', payload: { n: 2, text: 'Como streamer, quiero banear' } },
+    { type: 'pact_proposed', payload: { tests: [{ name: 'banea' }] } },
+    { type: 'decision_queued', payload: { id: 'd1', kind: 'unseal', question: '¿desello banea?' } },
+    { type: 'decision_queued', payload: { id: 'd2', kind: 'design', question: '¿lista o mapa?', suggested: 'mapa' } },
+  ]
+    .map((x) => JSON.stringify(x))
+    .join('\n')
+  const files: Record<string, string> = { '/tmp/.edd/index.jsonl': index, '/tmp/.edd/stories/banear/ledger.jsonl': ledger, '/tmp/BACKLOG.md': '1. Como streamer, quiero ver el chat\n2. Como streamer, quiero banear\n' }
+  on('fs.read', async (_$: any, e: any) => (e.path in files ? { value: files[e.path] } : { deny: 'no existe' }) as any)
+  const argvs: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    argvs.push([...e.argv])
+    return { value: { exitCode: e.argv[0] === 'edd' ? 0 : 1, stdout: e.argv[0] === 'edd' ? 'decidido d1\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
+  })
+  const prompts: string[] = []
+  on('prompt.submit', async (_$: any, e: any) => {
+    prompts.push(e.text)
+    return { text: e.text } as any
+  })
+  const cmds: string[] = []
+  on('command.run', { command: 'edd:story' }, async (_$: any, e: any) => {
+    cmds.push(`edd:story ${e.args}`)
+    return {}
+  })
+  on('session.cwd', async () => ({ value: '/tmp' }) as any)
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'tab-edd' })
+  await new Promise((r) => (globalThis as any).setTimeout(r, 50))
+  const drawn = JSON.stringify(await m.drawn())
+  for (const x of ['aprobar pacto', 'continuar', 'parar', 'allow', 'deny', 'sugerido', 'responder']) expect(drawn).toContain(x)
+  await m.press({ key: 'edd-pact-ok' })
+  await m.press({ key: 'edd-d-d1-allow' })
+  await m.press({ key: 'edd-d-d2-sug-btn' })
+  await m.press({ key: 'edd-d-d1-cli-allow' })
+  await m.press({ key: 'edd-continue' })
+  await m.press({ key: 'edd-stop' })
+  expect(prompts).toEqual(['ok', 'allow (decisión d1)', 'mapa (decisión d2)'])
+  expect(cmds).toEqual(['edd:story 2'])
+  const edds = argvs.filter((a) => a[0] === 'edd')
+  expect(edds).toEqual([
+    ['edd', 'decide', 'd1', 'allow', '--by', 'cli'],
+    ['edd', 'stop', 'parado desde NERV'],
+  ])
 })
 
 test('la barra incluye la pestaña EDD', async ($) => {

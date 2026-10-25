@@ -153,6 +153,7 @@ let effortAt = 0
 let forge: any = undefined
 let nodd: any = undefined
 let edd: any = undefined
+const eddAnswers: Record<string, string> = {}
 let cortex: { stats?: any; recent?: any[]; err?: string; at?: number } = {}
 let blue = { ars: 1555, live: false, at: 0 }
 type YtItem = { id: string; title: string; ch: string; d: number }
@@ -2386,6 +2387,63 @@ export const eddStory = (entries: readonly any[]): EddView => {
   return v
 }
 
+export type EddBacklogItem = { n: number; text: string; slug?: string; state: 'todo' | 'open' | 'closed' }
+export const eddBacklog = (md: string, index: readonly any[]): EddBacklogItem[] => {
+  const slugs = new Map<number, string>()
+  const closed = new Set<string>()
+  for (const e of index) {
+    const p = (e && e.payload) || {}
+    const n = typeof p.n === 'number' ? p.n : typeof p.storyIndex === 'number' ? p.storyIndex : null
+    if (e?.type === 'story_opened' && p.slug && n != null) slugs.set(n, p.slug)
+    else if (e?.type === 'story_closed' && p.slug) closed.add(p.slug)
+  }
+  const items: EddBacklogItem[] = []
+  for (const line of String(md || '').split('\n')) {
+    const m = /^\s*(\d+)\.\s+(.*)$/.exec(line)
+    if (!m) continue
+    const n = Number(m[1])
+    const slug = slugs.get(n)
+    items.push({ n, text: m[2]!.trim(), ...(slug ? { slug } : {}), state: slug ? (closed.has(slug) ? 'closed' : 'open') : 'todo' })
+  }
+  return items
+}
+
+const EDD_MISSING = 'edd no está en el PATH (npm link / npm i -g @gonrocca/edd)'
+const firstLine = (s: unknown) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
+async function eddAct($: any, fn: () => Promise<string | void>) {
+  try {
+    const msg = await fn()
+    if (msg) $.ui.toast(clip(msg, 70))
+  } catch (err: any) {
+    $.ui.toast(clip(String(err?.message || err), 70))
+  }
+  await refreshEdd($)
+  $.ui.invalidate('ui.render')
+}
+async function eddCli($: any, root: string, args: string[]): Promise<string> {
+  let r: any
+  try {
+    r = await $.process.run(['edd', ...args], { cwd: root, timeoutMs: 60000 })
+  } catch (err: any) {
+    if (/ENOENT|not found|no such file/i.test(String(err?.message || err))) return EDD_MISSING
+    throw err
+  }
+  if (r.exitCode === 127 || (r.exitCode !== 0 && /ENOENT|command not found/i.test(String(r.stderr || '')))) return EDD_MISSING
+  return firstLine(r.stdout) || firstLine(r.stderr) || (r.exitCode === 0 ? `edd ${args[0]} ok` : `edd ${args[0]}: exit ${r.exitCode}`)
+}
+// command.run / prompt.submit se encolan hasta que la sesión está libre (una historia entera puede tardar): no se esperan
+const eddToastErr = ($: any) => (err: any) => $.ui.toast(clip(String(err?.message || err), 70))
+const eddSlash = ($: any, command: string, args?: string) =>
+  eddAct($, async () => {
+    $.command.run(args ? { command, args } : { command }).catch(eddToastErr($))
+    return `/${command}${args ? ' ' + args : ''} enviado`
+  })
+const eddChat = ($: any, text: string, msg: string) =>
+  eddAct($, async () => {
+    $.prompt.submit({ text }).catch(eddToastErr($))
+    return msg
+  })
+
 async function refreshEdd($: any) {
   const root = gitRoot || cwdNow
   if (!root) {
@@ -2394,7 +2452,7 @@ async function refreshEdd($: any) {
   }
   const idxRaw = await $.fs.read(`${root}/.edd/index.jsonl`).catch(() => undefined)
   if (typeof idxRaw !== 'string') {
-    edd = { present: false }
+    edd = { present: false, root }
     return
   }
   const index = eddParse(idxRaw)
@@ -2419,7 +2477,10 @@ async function refreshEdd($: any) {
       approvals = cfg.approvals || ''
     } catch {}
   }
-  edd = { present: true, counts, view, presence, approvals, activeOnBranch, at: now() }
+  const blRaw = await $.fs.read(`${root}/BACKLOG.md`).catch(() => undefined)
+  const backlog = typeof blRaw === 'string' ? eddBacklog(blRaw, index) : null
+  if (view && view.n == null) view.n = backlog?.find((b) => b.slug === view!.slug)?.n ?? null
+  edd = { present: true, root, counts, view, presence, approvals, activeOnBranch, backlog, at: now() }
 }
 
 async function refreshForge($: any) {
@@ -3424,9 +3485,17 @@ function drawEdd($: any, e: any, out: any[], h: any) {
       t([span('necesita git · Node ≥22.6 · runner (vitest/node:test)', C.dim)]),
       t([span('los tests sellados no se editan a mano: los frena un hook de git', C.dim)]),
     ])
+  const a = eddActions($, e, h, edd?.root || '')
   if (!edd || !edd.present) {
+    if (edd && edd.present === false)
+      out.push(
+        card('edd-init', '◎ sin inicializar', C.dim, [
+          t([span('este repo no tiene .edd/', C.muted)]),
+          a.row('edd-init-row', [a.btn('edd-init-btn', '▶ edd init', a.init), a.btn('edd-init-bl', '▶ /edd:backlog', () => a.slash('edd:backlog'))]),
+          t([span('/edd:backlog también prepara una carpeta vacía (git, manifest, edd init)', C.dim)], C.dim, { wrap: 'wrap' }),
+        ]),
+      )
     out.push(expl())
-    if (edd && edd.present === false) out.push(card('edd-init', '◎ sin inicializar', C.dim, [t([span('este repo no tiene .edd/', C.muted)]), t([span('arrancalo con ', C.dim), span('edd init', C.cyan)])]))
     return
   }
   const c = edd.counts || { opened: 0, closed: 0 }
@@ -3443,7 +3512,8 @@ function drawEdd($: any, e: any, out: any[], h: any) {
   )
   const v = edd.view
   if (!v) {
-    out.push(card('edd-none', '◎ sin historia activa', C.muted, [t([span(edd.activeOnBranch ? 'branch edd/ sin ledger todavía' : 'no estás en un branch edd/…', C.muted)]), t([span('abrí una con ', C.dim), span('/edd:story N', C.cyan)])]))
+    out.push(card('edd-none', '◎ sin historia activa', C.muted, [t([span(edd.activeOnBranch ? 'branch edd/ sin ledger todavía' : 'no estás en un branch edd/…', C.muted)]), t([span('elegí una del backlog: ', C.dim), span('▶ N', C.cyan), span(' corre /edd:story N', C.dim)])]))
+    a.backlogCard(out)
     out.push(expl())
     return
   }
@@ -3466,14 +3536,113 @@ function drawEdd($: any, e: any, out: any[], h: any) {
   const per = v.perito
   rows.push(Box({ flexDirection: 'row', justifyContent: 'space-between', children: [t([span('PERITO', C.muted)]), t([per ? span(`${per.findings} obs · seals ${per.sealsOk ? 'ok' : 'ROTO'} · suite ${per.green ? 'verde' : 'ROJA'}`, per.sealsOk && per.green ? C.lime : C.amber) : span('sin revisar', C.dim)])] }))
   out.push(scard('edd-prog', '◢ PROGRESO', v.open ? C.orange : C.violet, rows, 10))
+  const storyArg = v.n != null ? String(v.n) : v.slug
+  if (v.open && !v.approved) out.push(a.row('edd-pact-row', [a.btn('edd-pact-ok', '✓ aprobar pacto', () => a.chat('ok', 'ok enviado al chat'), true), t([span(' el skill espera tu ok', C.dim)])]))
+  out.push(
+    a.row(
+      'edd-act-row',
+      v.open
+        ? [a.btn('edd-continue', '↻ continuar', () => a.slash('edd:story', storyArg)), a.btn('edd-stop', '■ parar', () => a.cli(['stop', 'parado desde NERV'])), a.btn('edd-status', 'estado', () => a.slash('edd:status'))]
+        : [a.btn('edd-main', 'git checkout main', a.checkoutMain), ...(a.next(v.n) ? [a.btn('edd-next', `▶ siguiente (${a.next(v.n)!.n})`, () => a.slash('edd:story', String(a.next(v.n)!.n)))] : []), a.btn('edd-status', 'estado', () => a.slash('edd:status'))],
+    ),
+  )
   if (v.decisions && v.decisions.length) {
     const drows: any[] = []
     for (const d of v.decisions) {
       drows.push(t([span('• ', C.amber), span(`[${d.kind}] `, C.amber, { bold: true }), span(clip(d.question, w - 8), C.text)]))
       if (d.suggested) drows.push(t([span('  sugerido: ', C.dim), span(clip(d.suggested, w - 14), C.muted)]))
+      drows.push(...a.decision(d))
     }
-    out.push(scard('edd-dec', '⏸ TE FRENA ACÁ · decisiones', C.amber, drows, 10))
+    out.push(scard('edd-dec', '⏸ TE FRENA ACÁ · decisiones', C.amber, drows, 14))
   }
+  if (!v.open) a.backlogCard(out)
+}
+
+function eddActions($: any, e: any, h: any, root: string) {
+  const { Box, Button, Input } = $.ui.resolve(e)
+  const { t, span, chip, scard, w } = h
+  const btn = (key: string, label: string, onPress: () => void, hot = false) => chip(key, label, hot, C.tabBg, onPress)
+  // la variante por CLI (sin skill esperando) va sin fondo, más apagada que el botón del chat
+  const dimBtn = (key: string, label: string, onPress: () => void) => Box({ key: 'box-' + key, paddingX: 1, children: [Button({ key, label, plain: true, dimColor: true, onPress })] })
+  const row = (key: string, children: any[]) => Box({ key, flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children })
+  const slash = (command: string, args?: string) => void eddSlash($, command, args)
+  const chat = (text: string, msg: string) => void eddChat($, text, msg)
+  const cli = (args: string[]) => void eddAct($, () => eddCli($, root, args))
+  const init = () => cli(['init'])
+  const checkoutMain = () =>
+    void eddAct($, async () => {
+      const r = await $.process.run(['git', 'checkout', 'main'], { cwd: root, timeoutMs: 15000 })
+      return firstLine(r.stderr) || firstLine(r.stdout) || (r.exitCode === 0 ? 'en main' : `git checkout: exit ${r.exitCode}`)
+    })
+  const backlog: EddBacklogItem[] | null = edd?.backlog ?? null
+  const next = (n: number | null) => (n == null || !backlog ? undefined : backlog.find((b) => b.n === n + 1 && b.state !== 'closed'))
+  const decision = (d: EddDecision): any[] => {
+    const send = (answer: string) => chat(`${answer} (decisión ${d.id})`, `${clip(answer, 30)} enviado al chat`)
+    const viaCli = (answer: string) => cli(['decide', d.id, answer, '--by', 'cli'])
+    if (['size_waiver', 'dependency', 'unseal', 'quarantine'].includes(d.kind))
+      return [
+        row(`edd-d-${d.id}`, [
+          btn(`edd-d-${d.id}-allow`, 'allow', () => send('allow')),
+          btn(`edd-d-${d.id}-deny`, 'deny', () => send('deny')),
+          dimBtn(`edd-d-${d.id}-cli-allow`, 'cli allow', () => viaCli('allow')),
+          dimBtn(`edd-d-${d.id}-cli-deny`, 'cli deny', () => viaCli('deny')),
+        ]),
+      ]
+    const draft = () => String(eddAnswers[d.id] || '').trim()
+    return [
+      ...(d.suggested ? [row(`edd-d-${d.id}-sug`, [btn(`edd-d-${d.id}-sug-btn`, 'sugerido', () => send(d.suggested!)), dimBtn(`edd-d-${d.id}-cli-sug`, 'cli sugerido', () => viaCli(d.suggested!))])] : []),
+      Box({
+        key: `edd-d-${d.id}-free`,
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [
+          t([span('›', C.amber, { bold: true })]),
+          Box({
+            key: `edd-d-${d.id}-in-box`,
+            flexGrow: 1,
+            children: [
+              Input({
+                key: `edd-d-${d.id}-in`,
+                placeholder: 'tu respuesta…',
+                value: eddAnswers[d.id] || '',
+                submitLabel: 'Enter',
+                onInput: (val: string) => (eddAnswers[d.id] = val),
+                onSubmit: (val: string) => {
+                  eddAnswers[d.id] = val
+                  if (draft()) send(draft())
+                },
+              }),
+            ],
+          }),
+          btn(`edd-d-${d.id}-reply`, 'responder', () => (draft() ? send(draft()) : $.ui.toast('escribí una respuesta'))),
+          dimBtn(`edd-d-${d.id}-cli-reply`, 'cli', () => (draft() ? viaCli(draft()) : $.ui.toast('escribí una respuesta'))),
+        ],
+      }),
+    ]
+  }
+  const backlogCard = (out: any[]) => {
+    if (!backlog) {
+      out.push(
+        h.card('edd-bl', '◆ BACKLOG', C.cyan, [
+          t([span('no hay BACKLOG.md: armalo charlando una historia por línea', C.dim)], C.dim, { wrap: 'wrap' }),
+          row('edd-bl-row', [btn('edd-bl-new', '▶ /edd:backlog', () => slash('edd:backlog')), btn('edd-bl-status', 'estado', () => slash('edd:status'))]),
+        ]),
+      )
+      return
+    }
+    const rows: any[] = [row('edd-bl-chips', [btn('edd-bl-status', 'estado', () => slash('edd:status')), btn('edd-bl-edit', '/edd:backlog', () => slash('edd:backlog'))])]
+    if (!backlog.length) rows.push(t([span('BACKLOG.md sin historias numeradas (1. Como …)', C.dim)]))
+    for (const b of backlog) {
+      const label = b.state === 'closed' ? `✓ ${b.n}` : `${b.state === 'open' ? '↻' : '▶'} ${b.n}`
+      const lead =
+        b.state === 'closed'
+          ? Box({ key: `edd-bl-${b.n}-done`, paddingX: 1, children: [t([span(label, C.dim)])] })
+          : btn(`edd-bl-${b.n}`, label, () => slash('edd:story', String(b.n)), b.state === 'open')
+      rows.push(Box({ key: `edd-bl-${b.n}-row`, flexDirection: 'row', columnGap: 1, children: [lead, t([span(clip(b.text, Math.max(8, w - label.length - 5)), b.state === 'closed' ? C.dim : C.text)])] }))
+    }
+    out.push(scard('edd-bl', `◆ BACKLOG · ${backlog.filter((b) => b.state === 'closed').length}/${backlog.length}`, C.cyan, rows, 12))
+  }
+  return { btn, row, slash, chat, cli, init, checkoutMain, next, decision, backlogCard }
 }
 
 function drawForge($: any, e: any, out: any[], h: any) {
