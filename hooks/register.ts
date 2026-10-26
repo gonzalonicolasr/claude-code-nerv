@@ -2477,10 +2477,15 @@ async function refreshEdd($: any) {
       approvals = cfg.approvals || ''
     } catch {}
   }
+  // .edd/presence (edd presence <modo>) es local a este checkout y pisa la config: es lo que ve esta sesión
+  const localRaw = await $.fs.read(`${root}/.edd/presence`).catch(() => undefined)
+  const local = typeof localRaw === 'string' ? localRaw.trim() : ''
+  const presenceLocal = ['sync', 'async', 'auto'].includes(local)
+  if (presenceLocal) presence = local
   const blRaw = await $.fs.read(`${root}/BACKLOG.md`).catch(() => undefined)
   const backlog = typeof blRaw === 'string' ? eddBacklog(blRaw, index) : null
   if (view && view.n == null) view.n = backlog?.find((b) => b.slug === view!.slug)?.n ?? null
-  edd = { present: true, root, counts, view, presence, approvals, activeOnBranch, backlog, at: now() }
+  edd = { present: true, root, counts, view, presence, presenceLocal, approvals, activeOnBranch, backlog, at: now() }
 }
 
 async function refreshForge($: any) {
@@ -3505,7 +3510,15 @@ function drawEdd($: any, e: any, out: any[], h: any) {
       justifyContent: 'space-between',
       marginRight: 2,
       children: [
-        t([span(' ✒ EDD ', C.ink, { bold: true, backgroundColor: C.violet }), ...(edd.presence ? [span(`  ${edd.presence}`, C.cyan, { bold: true })] : []), ...(edd.approvals ? [span(` · ${edd.approvals}`, C.muted)] : [])]),
+        Box({
+          flexDirection: 'row',
+          columnGap: 1,
+          children: [
+            t([span(' ✒ EDD ', C.ink, { bold: true, backgroundColor: C.violet }), ...(edd.presence ? [span(`  ${edd.presence}`, edd.presence === 'auto' ? C.lime : C.cyan, { bold: true })] : []), ...(edd.presenceLocal ? [span(' local', C.dim)] : []), ...(edd.approvals ? [span(` · ${edd.approvals}`, C.muted)] : [])]),
+            // cambia sólo este checkout (.edd/presence): las otras sesiones siguen con lo suyo
+            ...(edd.presence ? [a.btn('edd-presence', edd.presence === 'auto' ? '⇄ interactivo' : '⇄ auto', a.togglePresence)] : []),
+          ],
+        }),
         t([span(` ${c.closed}✓ `, C.lime), span(`/ ${c.opened} historias `, C.muted)]),
       ],
     }),
@@ -3574,6 +3587,14 @@ function eddActions($: any, e: any, h: any, root: string) {
       const r = await $.process.run(['git', 'checkout', 'main'], { cwd: root, timeoutMs: 15000 })
       return firstLine(r.stderr) || firstLine(r.stdout) || (r.exitCode === 0 ? 'en main' : `git checkout: exit ${r.exitCode}`)
     })
+  // auto ⇄ interactivo (async) para este checkout, con confirmación; lo escribe edd presence en .edd/presence
+  const togglePresence = async () => {
+    const to = edd?.presence === 'auto' ? 'async' : 'auto'
+    const what = to === 'auto' ? 'auto: la política responde todo y la historia corre sola' : 'interactivo (async): el skill te pregunta en los checkpoints'
+    const pick = await $.ui.ask(`¿Pasar esta sesión a ${what}? Sólo cambia este checkout (.edd/presence); las otras sesiones no se tocan.`, { options: ['Cambiar', 'Cancelar'], header: 'EDD' }).catch(() => 'Cancelar')
+    if (pick !== 'Cambiar') return
+    void eddAct($, () => eddCli($, root, ['presence', to]))
+  }
   const backlog: EddBacklogItem[] | null = edd?.backlog ?? null
   const next = (n: number | null) => (n == null || !backlog ? undefined : backlog.find((b) => b.n === n + 1 && b.state !== 'closed'))
   const decision = (d: EddDecision): any[] => {
@@ -3642,7 +3663,7 @@ function eddActions($: any, e: any, h: any, root: string) {
     }
     out.push(scard('edd-bl', `◆ BACKLOG · ${backlog.filter((b) => b.state === 'closed').length}/${backlog.length}`, C.cyan, rows, 12))
   }
-  return { btn, row, slash, chat, cli, init, checkoutMain, next, decision, backlogCard }
+  return { btn, row, slash, chat, cli, init, checkoutMain, togglePresence, next, decision, backlogCard }
 }
 
 function drawForge($: any, e: any, out: any[], h: any) {
