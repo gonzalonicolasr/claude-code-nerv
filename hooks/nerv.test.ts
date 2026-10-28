@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog } from './register'
+import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1227,4 +1227,66 @@ test('la barra incluye la pestaña EDD', async ($) => {
   })
   const text = JSON.stringify(await m.drawn())
   expect(text).toContain('EDD')
+})
+
+const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90, cache_creation_input_tokens: 0 }
+
+test('side chat: el prompt avisa que es una pregunta lateral sin herramientas y arrastra la charla anterior', () => {
+  const first = sidePrompt([], '¿cómo viene?')
+  expect(first).toContain('SIDE CHAT')
+  expect(first).toContain('No tenés herramientas')
+  expect(first.endsWith('Pregunta: ¿cómo viene?')).toBe(true)
+  expect(first).not.toContain('P: ')
+  const next = sidePrompt([{ q: '¿cómo viene?', a: 'va por el test 3', at: 0 }, { q: 'colgada', err: 'se cortó', at: 0 }], '¿y el 4?')
+  expect(next).toContain('P: ¿cómo viene?\nR: va por el test 3')
+  expect(next).not.toContain('colgada')
+  expect(next.endsWith('Pregunta: ¿y el 4?')).toBe(true)
+})
+
+test('side chat: las líneas parten la pregunta al ancho, respetan los renglones de la respuesta y dicen lo que costó', () => {
+  const lines = sideLines([{ q: 'una pregunta bastante larga para partir', a: 'uno\n\ndos', at: 0, ms: 3000, usage: USAGE }], 20)
+  expect(lines).toEqual([
+    { text: '› una pregunta', kind: 'q' },
+    { text: '  bastante larga', kind: 'q' },
+    { text: '  para partir', kind: 'q' },
+    { text: 'uno', kind: 'a' },
+    { text: '', kind: 'a' },
+    { text: 'dos', kind: 'a' },
+    { text: '3 s · 100 tok · cache 90%', kind: 'meta' },
+  ])
+  const two = sideLines([{ q: 'a', err: 'falló', at: 0 }, { q: 'b', at: 0 }], 20)
+  expect(two.map((l) => l.kind)).toEqual(['q', 'err', 'meta', 'q', 'wait'])
+})
+
+test('SIDE CHAT: la pregunta va por un fork de la sesión y la respuesta queda en la pestaña', async ($, on) => {
+  const asked: string[] = []
+  on('model.fork', async (_$: any, e: any) => {
+    asked.push(e.prompt)
+    return { value: { isAnswered: true, text: `respuesta ${asked.length}`, usage: USAGE } } as any
+  })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'tab-side' })
+  const inputKey = async () => JSON.stringify(await m.drawn()).match(/side-q-\d+/)![0]
+  await m.input({ key: await inputKey(), text: '¿cómo viene?', kind: 'submit' })
+  await new Promise((r) => (globalThis as any).setTimeout(r, 50))
+  expect(JSON.stringify(await m.drawn())).toContain('respuesta 1')
+  expect(asked[0]).toContain('Pregunta: ¿cómo viene?')
+  await m.input({ key: await inputKey(), text: '¿y ahora?', kind: 'submit' })
+  await new Promise((r) => (globalThis as any).setTimeout(r, 50))
+  expect(JSON.stringify(await m.drawn())).toContain('respuesta 2')
+  expect(asked[1]).toContain('R: respuesta 1')
+  await m.press({ key: 'side-clear' })
+  expect(JSON.stringify(await m.drawn())).not.toContain('respuesta 1')
+})
+
+test('SIDE CHAT: si todavía no hay turno para forkear lo dice en vez de quedarse esperando', async ($, on) => {
+  on('model.fork', async () => ({ value: { isAnswered: false, reason: 'nothing-to-fork' } }) as any)
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.press({ key: 'tab-side' })
+  const key = JSON.stringify(await m.drawn()).match(/side-q-\d+/)![0]
+  await m.input({ key, text: '¿cómo viene?', kind: 'submit' })
+  await new Promise((r) => (globalThis as any).setTimeout(r, 50))
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('todavía no hay')
+  expect(drawn).not.toContain('pensando')
 })

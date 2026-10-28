@@ -53,6 +53,13 @@ abiertas y lo que pliegues queda guardado).
     Anthropic" hace lo mismo al revés. Si hay texto escrito en el prompt o el turno está corriendo,
     no cierra nada; si el `/exit` no llega en 10 s, queda todo como estaba.
   - **"en tab nueva"** abre un fork de la conversación en otra tab de herdr y deja esta abierta.
+- **s · SIDE CHAT:** un chat al costado sobre **esta** sesión, para preguntar cómo viene, qué falta o
+  en qué se trabó sin cortar al agente: cada pregunta es un `$.model.fork`, el último pedido del hilo
+  principal (todo su contexto, servido del cache) más tu pregunta, sin herramientas y sin escribir
+  nada en el transcript. Las preguntas anteriores del side chat viajan en el prompt (las últimas 6).
+  Debajo de cada respuesta, lo que tardó, los tokens y cuánto vino del cache. Si la sesión todavía no
+  terminó ningún turno, lo dice; si la respuesta llega con otra pestaña abierta, avisa con un toast.
+  `limpiar` borra la charla (vive en la sesión: un reload del mod la vacía).
 
 Además, el spinner de "pensando" se reemplaza por un escáner animado con verbos EVA
 ("Sincronizando", "Consultando a MAGI"…) y el `SYNC` de contexto. Cuando un comando que fallaba
@@ -104,7 +111,7 @@ Si tenés varios mods, separalos con `:`.
 | `/nerv prs` | Refresca las PRs |
 | `/nerv debug` | Muestra el estado interno |
 
-Con la barra enfocada, las teclas `1` a `9` y `0` cambian de pestaña. Todo lo que se ve como botón se
+Con la barra enfocada, las teclas `1` a `9`, `0` y `s` cambian de pestaña. Todo lo que se ve como botón se
 puede clickear.
 
 ## Temas

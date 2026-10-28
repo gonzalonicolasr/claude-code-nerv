@@ -48,6 +48,7 @@ const TABS = [
   { id: 'yt', label: 'YOUTUBE', hotkey: '8' },
   { id: 'models', label: 'MODELOS', hotkey: '9' },
   { id: 'edd', label: 'EDD', hotkey: '0' },
+  { id: 'side', label: 'SIDE CHAT', hotkey: 's' },
 ]
 const PHASES = ['explore', 'plan', 'build', 'veredicto']
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -1510,6 +1511,7 @@ function draw($: any, e: any) {
   if (tab === 'forge') drawForge($, e, out, { t, span, card, scard, chip, w, cols })
   if (tab === 'edd') drawEdd($, e, out, { t, span, card, scard, chip, w })
   if (tab === 'models') drawModels($, e, out, { t, span, card, chip, w })
+  if (tab === 'side') drawSide($, e, out, { t, span, card, scard, chip, w, dock })
 
   if (tab === 'yt') {
     const n = yt.now
@@ -3664,6 +3666,151 @@ function eddActions($: any, e: any, h: any, root: string) {
     out.push(scard('edd-bl', `◆ BACKLOG · ${backlog.filter((b) => b.state === 'closed').length}/${backlog.length}`, C.cyan, rows, 12))
   }
   return { btn, row, slash, chat, cli, init, checkoutMain, togglePresence, next, decision, backlogCard }
+}
+
+// SIDE CHAT: preguntas sobre esta sesión sin cortar al agente. Cada pregunta es un $.model.fork:
+// el último pedido del hilo principal (con todo su contexto, servido del cache) más la pregunta,
+// sin herramientas y sin escribir nada en el transcript de la sesión.
+export type SideMsg = { q: string; a?: string; err?: string; at: number; ms?: number; usage?: any }
+export type SideLine = { text: string; kind: 'q' | 'a' | 'err' | 'meta' | 'wait' }
+const SIDE_KEEP = 6
+const SIDE_ROWS = 14
+const SIDE_WHY: Record<string, string> = {
+  'nothing-to-fork': 'todavía no hay qué leer: la sesión tiene que terminar al menos un turno',
+  'api-error': 'la API falló',
+  'empty-reply': 'respondió sin texto',
+  aborted: 'se cortó antes de responder',
+}
+let side: SideMsg[] = []
+let sideDraft = ''
+let sideKey = 0
+let sideBusy = false
+let sidePrevMax = 0
+
+// El fork no recuerda las preguntas anteriores del side chat: viajan en el prompt.
+export const sidePrompt = (prev: readonly SideMsg[], q: string) => {
+  const done = prev.filter((m) => m.a).slice(-SIDE_KEEP)
+  return [
+    '[SIDE CHAT de NERV] El usuario te pregunta esto desde una pestaña lateral mientras la sesión principal sigue trabajando aparte; esta respuesta no entra en esa sesión ni la interrumpe.',
+    'No tenés herramientas: contestá sólo con lo que ya está en esta conversación (qué se pidió, qué se hizo, en qué estado está, qué falta, qué se trabó). No retomes la tarea ni anuncies que vas a hacer algo. Respondé corto y directo, en castellano rioplatense.',
+    ...(done.length ? ['', 'Lo que ya charlaron en el side chat:', ...done.flatMap((m) => [`P: ${m.q}`, `R: ${clip(m.a!, 1200)}`])] : []),
+    '',
+    `Pregunta: ${q}`,
+  ].join('\n')
+}
+
+export const sideLines = (msgs: readonly SideMsg[], width: number): SideLine[] => {
+  const out: SideLine[] = []
+  msgs.forEach((m, i) => {
+    if (i) out.push({ text: '', kind: 'meta' })
+    wrapCells(oneLine(m.q), width - 2).forEach((l, j) => out.push({ text: (j ? '  ' : '› ') + l, kind: 'q' }))
+    if (m.err) out.push(...wrapCells('⚠ ' + m.err, width).map((text) => ({ text, kind: 'err' as const })))
+    else if (m.a === undefined) out.push({ text: 'pensando…', kind: 'wait' })
+    else for (const para of m.a.split('\n')) out.push(...wrapCells(para, width).map((text) => ({ text, kind: 'a' as const })))
+    if (m.a !== undefined && m.usage) {
+      const u = m.usage
+      const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+      out.push({ text: `${took(m.ms || 0)} · ${tok(ctx)} tok · cache ${ctx ? Math.round((100 * (u.cache_read_input_tokens || 0)) / ctx) : 0}%`, kind: 'meta' })
+    }
+  })
+  return out
+}
+
+async function sideAsk($: any, text: string) {
+  const q = text.trim()
+  if (!q) return void $.ui.toast('escribí una pregunta')
+  if (sideBusy) return void $.ui.toast('esperá la respuesta anterior')
+  const prompt = sidePrompt(side, q)
+  const m: SideMsg = { q, at: now() }
+  side.push(m)
+  sideDraft = ''
+  sideKey++
+  sideBusy = true
+  delete cardScroll['side-log']
+  $.ui.invalidate('ui.render')
+  try {
+    const r = await $.model.fork({ prompt })
+    if (r.isAnswered) {
+      m.a = r.text.trim()
+      m.usage = r.usage
+    } else m.err = SIDE_WHY[r.reason] + (r.reason === 'api-error' ? ` (${r.status ?? 'sin respuesta'} ${r.error})` : '')
+  } catch (err: any) {
+    m.err = clip(String(err?.message || err), 120)
+  }
+  m.ms = now() - m.at
+  sideBusy = false
+  delete cardScroll['side-log']
+  if (tab !== 'side' || !paneOpen) $.ui.toast('◇ side chat: ' + (m.err ? 'falló' : 'respondió'))
+  $.ui.invalidate('ui.render')
+}
+
+function drawSide($: any, e: any, out: any[], h: any) {
+  const { Box, Input } = $.ui.resolve(e)
+  const { t, span, card, scard, chip, w, dock } = h
+  const hue: Record<SideLine['kind'], string> = { q: C.cyan, a: C.text, err: C.amber, meta: C.dim, wait: C.lime }
+  const last = side.at(-1)
+  const rows = side.length
+    ? sideLines(side, w - 1).map((l) =>
+        l.kind === 'wait'
+          ? t([span(`${SPIN[frame % 4]} pensando… ${took(now() - (last?.at || now()))}`, hue.wait)])
+          : t([span(l.text || ' ', hue[l.kind], { bold: l.kind === 'q' })]),
+      )
+    : [
+        t([span('preguntá cómo viene la sesión: el agente de acá lee todo su contexto', C.muted)], C.muted, { wrap: 'wrap' }),
+        t([span('no usa herramientas ni frena al agente principal', C.dim)], C.dim, { wrap: 'wrap' }),
+      ]
+  // Alto fijo con scroll adentro, anclado a lo último salvo que hayas subido a leer.
+  if (dock && side.length) {
+    rows.unshift(...Array.from({ length: Math.max(0, SIDE_ROWS - rows.length) }, () => t([span(' ', C.dim)])))
+    const max = Math.max(0, rows.length - SIDE_ROWS)
+    cardScroll['side-log'] = chatScroll(cardScroll['side-log'], sidePrevMax, max)
+    sidePrevMax = max
+  }
+  out.push(scard('side-log', `◇ SIDE CHAT${side.length ? ` · ${side.length}` : ''}`, C.cyan, rows, SIDE_ROWS))
+  const send = () => void sideAsk($, sideDraft)
+  out.push(
+    card('side-ask', sideBusy ? `${SPIN[frame % 4]} esperando respuesta` : '› PREGUNTAR', sideBusy ? C.lime : C.violet, [
+      Box({
+        key: 'side-q-row',
+        flexDirection: 'row',
+        alignItems: 'center',
+        children: [
+          Box({
+            key: 'side-q-field',
+            flexGrow: 1,
+            borderStyle: 'round',
+            borderColor: C.violet,
+            paddingX: 1,
+            children: [
+              Input({
+                key: 'side-q-' + sideKey,
+                placeholder: '¿cómo viene?, ¿qué falta?…',
+                value: sideDraft,
+                submitLabel: 'preguntar',
+                onInput: (v: string) => (sideDraft = v),
+                onSubmit: (v: string) => void sideAsk($, v),
+              }),
+            ],
+          }),
+          Box({ key: 'side-go-box', marginLeft: 1, children: [chip('side-go', 'PREGUNTAR', !sideBusy, C.violet, send)] }),
+        ],
+      }),
+      Box({
+        key: 'side-foot',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        children: [
+          t([span('fork de la sesión · sin herramientas', C.dim)]),
+          chip('side-clear', 'limpiar', false, C.tabBg, () => {
+            side = []
+            sidePrevMax = 0
+            delete cardScroll['side-log']
+            $.ui.invalidate('ui.render')
+          }),
+        ],
+      }),
+    ]),
+  )
 }
 
 function drawForge($: any, e: any, out: any[], h: any) {
