@@ -786,7 +786,7 @@ test('MODELOS: "cambiar acá" cierra este Claude y un ayudante retoma la misma c
     if (a[0] === 'herdr' && a[2] === 'read') return { value: { exitCode: 0, stdout: screen, stderr: '' } }
     if (a[0] === 'herdr' && a[2] === 'process-info')
       return { value: { exitCode: 0, stdout: JSON.stringify({ result: { process_info: { foreground_processes: [{ name: 'claude', argv: ['claude', '--permission-mode', 'bypassPermissions', '--resume', 'viejo', '--model', 'opus'] }] } } }), stderr: '' } }
-    if (a[0] === 'grep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
+    if (a.join(' ').includes('"type":"user"')) return { value: { exitCode: 0, stdout: '', stderr: '' } }
     if (a[0] === 'sh' && a[2]?.startsWith('setsid')) spawned.push(a)
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
@@ -815,6 +815,49 @@ test('MODELOS: "cambiar acá" cierra este Claude y un ayudante retoma la misma c
   expect(cmd).not.toContain('--fork-session')
   expect(cmd).toContain("'--permission-mode' 'bypassPermissions'")
   expect(cmd).not.toContain('viejo')
+})
+
+test('MAGI: cambiar de cuenta retoma la misma conversación en el mismo pane aunque la carpeta haya cambiado', async ($, on) => {
+  mock.env(on, { HOME: '/h', HERDR_PANE_ID: 'w1:p1', HERDR_WORKSPACE_ID: 'w1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.model', async () => ({ value: 'priv8/claude-opus-5-5' }))
+  // Arrancó en /h (el transcript está en projects/-h/s1.jsonl) y ahora trabaja en /h/proj.
+  on('session.cwd', async () => ({ value: '/h/proj' }))
+  const spawned: string[][] = []
+  const lookups: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'herdr' && a[2] === 'read') return { value: { exitCode: 0, stdout: '❯\xa0Try "x"   │ NERV\n', stderr: '' } }
+    if (a[0] === 'herdr' && a[2] === 'process-info')
+      return { value: { exitCode: 0, stdout: JSON.stringify({ result: { process_info: { foreground_processes: [{ name: 'claude', argv: ['claude', '--permission-mode', 'bypassPermissions'] }] } } }), stderr: '' } }
+    if (a.join(' ').includes('"type":"user"')) {
+      lookups.push(a)
+      const found = a.join(' ').includes('/h/.claude') && a.includes('s1') && !a.join(' ').includes('-h-proj')
+      return { value: { exitCode: found ? 0 : 1, stdout: '', stderr: '' } }
+    }
+    if (a[0] === 'sh' && a[2]?.startsWith('setsid')) spawned.push(a)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const exits: number[] = []
+  on('command.run', { command: 'exit' }, async () => (exits.push(1), { text: '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/h/proj', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  for (let i = 0; i < 50 && !JSON.stringify(await m.drawn()).includes('"acct-menu"'); i++) await new Promise((r) => setTimeout(r, 10))
+  await m.press({ key: 'acct-menu' })
+  await m.press({ key: 'acct-go-personal' })
+  for (let i = 0; i < 50 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(lookups.length).toBeGreaterThan(0)
+  expect(exits).toEqual([1])
+  expect(spawned.length).toBe(1)
+  const [, , , , pane, cmd] = spawned[0]!
+  expect(pane).toBe('w1:p1')
+  expect(cmd).toContain('-u ANTHROPIC_BASE_URL')
+  expect(cmd).toContain('--resume s1')
+  expect(cmd).not.toContain('--fork-session')
+  expect(cmd).toContain("'--permission-mode' 'bypassPermissions'")
 })
 
 test('MODELOS: flags que se repiten al reabrir y prompt vacío leído de la pantalla', () => {

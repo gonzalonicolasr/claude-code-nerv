@@ -160,6 +160,9 @@ let blue = { ars: 1555, live: false, at: 0 }
 type YtItem = { id: string; title: string; ch: string; d: number }
 let yt: { results: YtItem[]; queue: YtItem[]; query: string; busy: boolean; err: string; now?: { pos?: number; dur?: number; pause?: boolean; idx: number; vol?: number; title?: string } } = { results: [], queue: [], query: '', busy: false, err: '' }
 let runDir = '/tmp'
+// Dentro de la Herdr app (herdr-core le pone HC_TERMINAL_ID a cada terminal) las imágenes
+// que manda Claude Code salen como □: la app no dibuja los placeholders de kitty. Ahí va texto.
+let inHerdrApp = false
 let ytDraft = ''
 let ytVolDraft: string | undefined
 let ytVolKey = 0
@@ -544,7 +547,7 @@ async function loadEmails($: any) {
 }
 
 async function switchAccount($: any, id: string) {
-  // No reemplaza la sesión: abre una tab nueva de herdr que reanuda esta conversación (fork).
+  // En el mismo pane y la misma conversación: cierra este Claude y lo retoma ahí con la otra cuenta.
   acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : ''
   if (!acctNote && id === 'priv8' && !mdl.ids.length) await refreshModels($, true)
   let target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
@@ -554,8 +557,8 @@ async function switchAccount($: any, id: string) {
   }
   if (!acctNote && id === 'priv8' && !target) acctNote = mdl.ids.length ? 'el CPAM no expone priv8/ — falta el prefix' : mdl.err || 'el CPAM no respondió'
   if (!acctNote) {
-    await relaunchWith($, target)
-    acctNote = mdlNote.startsWith('✓') ? `✓ ${acctName(id)} en tab nueva (fork de esta conversación)` : mdlNote
+    await relaunchHere($, target)
+    acctNote = mdlNote.startsWith('⚠') ? mdlNote : `${acctName(id)}: ${mdlNote}`
   }
   $.ui.invalidate('ui.render')
 }
@@ -1170,7 +1173,7 @@ function draw($: any, e: any) {
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
   if (!g0nShownIn(tab)) g0nShown = -1
-  else if (Image && e.surface === 'terminal') {
+  else if (Image && e.surface === 'terminal' && !inHerdrApp) {
     const f = g0nFrame()
     g0nShown = f
     out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source: { file: `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`, format: 'png' }, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
@@ -1530,7 +1533,7 @@ function draw($: any, e: any) {
       const info: any[] = wrap2(cur?.title || n.title || 'cargando…', tw).map((line) => t([span(line, C.text, { bold: true })]))
       if (cur?.ch) info.push(t([span(clip(cur.ch, tw), C.muted)]))
       nowRows.push(
-        thumb
+        thumb && !inHerdrApp
           ? Box({
               key: 'yt-head',
               flexDirection: 'row',
@@ -3285,9 +3288,10 @@ async function launchPlan($: any, id: string, fork: boolean, extra = '') {
   sessionId = (await $.session.id().catch(() => '')) || sessionId
   const base = configDir || `${home}/.claude`
   // --resume exige al menos un mensaje del usuario: una sesión recién abierta ya tiene el
-  // .jsonl (hooks de arranque) pero "No conversation found".
-  const hasTranscript = !!sessionId && !!cwdNow &&
-    (await $.process.run(['grep', '-qm1', '"type":"user"', transcriptPath(base, cwdNow, sessionId)], { timeoutMs: 5000 }).catch(() => undefined))?.exitCode === 0
+  // .jsonl (hooks de arranque) pero "No conversation found". El .jsonl queda en la carpeta donde
+  // arrancó la sesión, que no siempre es la de ahora (cambió el cwd): se busca por id en todas.
+  const hasTranscript = !!sessionId &&
+    (await $.process.run(['sh', '-c', 'grep -qsm1 \'"type":"user"\' "$0"/projects/*/"$1".jsonl', base, sessionId], { timeoutMs: 5000 }).catch(() => undefined))?.exitCode === 0
   const ctx = id ? cpamContexts((await $.fs.read(`${home}/.cli-proxy-api/config.yaml`).catch(() => '')) || '')[id] : undefined
   const cmd = mdlLaunchCmd({ id: id || undefined, sid: hasTranscript ? sessionId : undefined, ctx, fork, extra, keyHelper: `${home}/.local/bin/claude-go-key`, configDir: configDir && configDir !== `${home}/.claude` ? configDir : undefined })
   return { cmd, hasTranscript }
@@ -3792,20 +3796,27 @@ function drawSide($: any, e: any, out: any[], h: any) {
               }),
             ],
           }),
-          Box({ key: 'side-go-box', marginLeft: 1, children: [chip('side-go', 'PREGUNTAR', !sideBusy, C.violet, send)] }),
+          Box({ key: 'side-go-box', marginLeft: 1, flexShrink: 0, children: [chip('side-go', 'PREGUNTAR', !sideBusy, C.violet, send)] }),
         ],
       }),
       Box({
         key: 'side-foot',
         flexDirection: 'row',
         justifyContent: 'space-between',
+        alignItems: 'center',
         children: [
-          t([span('fork de la sesión · sin herramientas', C.dim)]),
-          chip('side-clear', 'limpiar', false, C.tabBg, () => {
-            side = []
-            sidePrevMax = 0
-            delete cardScroll['side-log']
-            $.ui.invalidate('ui.render')
+          t([span('fork · sin herramientas', C.dim)]),
+          Box({
+            key: 'side-clear-box',
+            flexShrink: 0,
+            children: [
+              chip('side-clear', 'limpiar', false, C.tabBg, () => {
+                side = []
+                sidePrevMax = 0
+                delete cardScroll['side-log']
+                $.ui.invalidate('ui.render')
+              }),
+            ],
           }),
         ],
       }),
@@ -4141,6 +4152,7 @@ export function register(on: any) {
     const r = await next(e)
     home = (await $.env.get('HOME').catch(() => '')) || ''
     runDir = (await $.env.get('XDG_RUNTIME_DIR').catch(() => '')) || '/tmp'
+    inHerdrApp = !!(await $.env.get('HC_TERMINAL_ID').catch(() => ''))
     paneId = (await $.env.get('HERDR_PANE_ID').catch(() => '')) || ''
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
