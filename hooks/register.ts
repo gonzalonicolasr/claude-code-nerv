@@ -851,8 +851,31 @@ async function herdrJson($: any, args: string[]) {
 async function checkFocus($: any) {
   const r = await herdrJson($, ['pane', 'get', paneId])
   if (!r?.pane) return
+  setAway($, r.pane.focused === false)
+}
+
+// En la Herdr app no hay HERDR_PANE_ID: la terminal está a la vista si su space es el activo y su
+// tab es la activa de ese space (view.json de la app + labels herdr.space/herdr.tab de herdr-core).
+// Sin esto las ~20 sesiones escondidas redibujaban el pane a 8 Hz cada una y colgaban la máquina.
+let appView = { mtime: -1, space: '', tab: '' }
+async function checkAppFocus($: any) {
+  const path = `${home}/.config/herdr-app/view.json`
+  const st = await $.fs.stat(path).catch(() => undefined)
+  if (!st || st.mtimeMs === appView.mtime) return
+  try {
+    const view = JSON.parse(String((await $.fs.read(path).catch(() => '')) || '{}'))
+    const id = String((await $.env.get('HC_TERMINAL_ID').catch(() => '')) || '')
+    const r = id ? await $.process.run(['hc', 'get', id, '--json'], { timeoutMs: 3000 }).catch(() => undefined) : undefined
+    if (r?.exitCode !== 0) return
+    const labels = JSON.parse(r.stdout)?.labels || {}
+    appView = { mtime: st.mtimeMs, space: String(labels['herdr.space'] || ''), tab: String(labels['herdr.tab'] || '') }
+    setAway($, !(appView.space && view.active === appView.space && view.spaces?.[appView.space] === appView.tab))
+  } catch {}
+}
+
+function setAway($: any, next: boolean) {
   const was = away
-  away = r.pane.focused === false
+  away = next
   if (!was && away) stopFast()
   if (was && !away) {
     startFast($)
@@ -4200,6 +4223,12 @@ export function register(on: any) {
       $.clock.every(2000, () => {
         if (!quiet) checkFocus($)
       })
+    else if (inHerdrApp) {
+      await checkAppFocus($)
+      $.clock.every(2000, () => {
+        if (!quiet) checkAppFocus($)
+      })
+    }
     $.clock.every(1000, () => {
       syncPrefs($)
     })
