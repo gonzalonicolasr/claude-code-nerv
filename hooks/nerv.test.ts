@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1110,6 +1110,25 @@ test('chat: el scroll de adentro queda anclado al último mensaje salvo que haya
   expect(chatScroll(1, 4, 6)).toBe(1)
   expect(chatScroll(5, 4, 2)).toBe(2)
   expect(chatScroll(0, 0, 0)).toBe(0)
+})
+
+test('rueda: mueve la tarjeta de abajo del puntero, sólo en la parte que se ve, y al llegar a la punta sigue al cuerpo', () => {
+  // cuerpo visible en las filas 10-29; PERFIL arranca tapada por la cabecera (filas 4-15), MODELOS abajo (16-35)
+  const hits = [
+    { key: 'perfil', top: 4, bottom: 16 },
+    { key: 'modelos', top: 16, bottom: 36 },
+  ]
+  const win = { top: 10, bottom: 30 }
+  const max = { perfil: 6, modelos: 4 }
+  expect(cardAt(hits, win, 12, 1, { perfil: 2 }, max)).toEqual({ key: 'perfil', offset: 3 })
+  expect(cardAt(hits, win, 20, -1, { modelos: 2 }, max)).toEqual({ key: 'modelos', offset: 1 })
+  // la parte de PERFIL tapada por las pestañas y la de MODELOS tapada por el pie del EFFORT no cuentan
+  expect(cardAt(hits, win, 6, 1, { perfil: 2 }, max)).toBeUndefined()
+  expect(cardAt(hits, win, 32, 1, { modelos: 2 }, max)).toBeUndefined()
+  // en la punta, la rueda pasa al cuerpo
+  expect(cardAt(hits, win, 12, 1, { perfil: 6 }, max)).toBeUndefined()
+  expect(cardAt(hits, win, 20, -1, { modelos: 0 }, max)).toBeUndefined()
+  expect(cardAt(hits, win, undefined, 1, {}, max)).toBeUndefined()
 })
 
 test('EN VIVO: el chat tiene alto fijo con scroll adentro y las cámaras entran en la misma vista', async ($, on) => {

@@ -144,6 +144,8 @@ const forgeAccounts: Record<string, boolean> = {}
 const cardScroll: Record<string, number> = {}
 const cardMax: Record<string, number> = {}
 let cardHits: { key: string; top: number; bottom: number }[] = []
+// Filas del cuerpo que se ven (entre la cabecera y el pie del EFFORT), en filas del pane.
+let bodyWin = { top: 0, bottom: 0 }
 let lastContent = 0
 let ramTotal = ''
 let effort: string | number | undefined
@@ -768,6 +770,20 @@ let chatPrevMax = 0
 // si subiste a leer, se queda donde estabas.
 export const chatScroll = (off: number | undefined, prevMax: number, max: number) => (off === undefined || off >= prevMax ? max : Math.min(off, max))
 
+// La rueda sobre una tarjeta con scroll propio la mueve a ella. Cuenta sólo la parte de la tarjeta
+// que se ve: con el cuerpo scrolleado, lo que quedó tapado por la cabecera o por el pie no es la
+// tarjeta. Y si la tarjeta ya llegó a su punta en esa dirección, la rueda sigue al cuerpo, como en un
+// navegador; si no, con el cuerpo más alto que el pane (pasa en la Herdr app) no había cómo bajarlo
+// con el puntero arriba de una tarjeta.
+export function cardAt(hits: { key: string; top: number; bottom: number }[], win: { top: number; bottom: number }, row: unknown, by: number, at: Record<string, number>, max: Record<string, number>) {
+  if (typeof row !== 'number' || row < win.top || row >= win.bottom) return undefined
+  const hit = hits.find((c) => row >= c.top && row < c.bottom)
+  if (!hit) return undefined
+  const cur = at[hit.key] || 0
+  const nxt = Math.max(0, Math.min(max[hit.key] || 0, cur + by))
+  return nxt !== cur ? { key: hit.key, offset: nxt } : undefined
+}
+
 export type ChatLine = { author?: string; text: string; self: boolean; who: number }
 // Líneas del chat para `width` celdas, lo más nuevo abajo, en `max` líneas como mucho. Entran
 // mensajes enteros desde el último hacia atrás; si el último solo no entra, se recorta con "…".
@@ -1142,6 +1158,7 @@ function draw($: any, e: any) {
   const { Box, Text, Raster, Button, Link, Input, Image } = $.ui.resolve(e)
   const dock = e.props.placement === 'dock' && (e.props.scroll?.bodyRows || 0) > 0
   for (const k of Object.keys(cardMax)) delete cardMax[k]
+  cardHits = []
   const cols = Math.max(20, (e.props.bodyColumns || 40) - (dock ? 1 : 0))
   const compact = !dock
   const narrow = compact && cols < 56
@@ -2140,6 +2157,7 @@ function draw($: any, e: any) {
     if (k && cardMax[k] !== undefined) cardHits.push({ key: k, top: y, bottom: y + hgt })
     y += hgt
   }
+  bodyWin = { top: measure(head, cols), bottom: measure(head, cols) + view }
   lastView = view
   lastContent = content
   bodyMax = Math.max(0, content - view)
@@ -4336,15 +4354,10 @@ export function register(on: any) {
   })
 
   on('ui.scroll', { requestId: PANE }, async ($: any, e: any, next: any) => {
-    const row = e.pointer?.row
-    const hit = typeof row === 'number' ? cardHits.find((c) => row >= c.top && row < c.bottom) : undefined
-    if (hit) {
-      const cur = cardScroll[hit.key] || 0
-      const nxt = Math.max(0, Math.min(cardMax[hit.key] || 0, cur + (e.by || 0)))
-      if (nxt !== cur) {
-        cardScroll[hit.key] = nxt
-        $.ui.invalidate('ui.render')
-      }
+    const card = cardAt(cardHits, bodyWin, e.pointer?.row, e.by || 0, cardScroll, cardMax)
+    if (card) {
+      cardScroll[card.key] = card.offset
+      $.ui.invalidate('ui.render')
       return {}
     }
     if (!bodyMax) return next(e)
