@@ -160,9 +160,27 @@ let blue = { ars: 1555, live: false, at: 0 }
 type YtItem = { id: string; title: string; ch: string; d: number }
 let yt: { results: YtItem[]; queue: YtItem[]; query: string; busy: boolean; err: string; now?: { pos?: number; dur?: number; pause?: boolean; idx: number; vol?: number; title?: string } } = { results: [], queue: [], query: '', busy: false, err: '' }
 let runDir = '/tmp'
-// Dentro de la Herdr app (herdr-core le pone HC_TERMINAL_ID a cada terminal) las imágenes
-// que manda Claude Code salen como □: la app no dibuja los placeholders de kitty. Ahí va texto.
+// Dentro de la Herdr app herdr-core le pone HC_TERMINAL_ID a cada terminal: no hay HERDR_PANE_ID
+// (la visibilidad sale de checkAppFocus) y herdr-core rechaza las imágenes kitty por archivo
+// (t=f → EINVAL unsupported medium): ahí las imágenes van como bytes PNG, leídos una vez.
 let inHerdrApp = false
+const imgBytes: Record<string, string> = {}
+function imgSource($: any, file: string) {
+  if (!inHerdrApp) return { file, format: 'png' }
+  const b = imgBytes[file]
+  if (b) return { png: b }
+  if (b === undefined) {
+    imgBytes[file] = ''
+    $.fs
+      .read(file, { as: 'bytes' })
+      .then((r: any) => {
+        imgBytes[file] = r?.base64 || ''
+        if (imgBytes[file]) $.ui.invalidate('ui.render')
+      })
+      .catch(() => undefined)
+  }
+  return undefined
+}
 let ytDraft = ''
 let ytVolDraft: string | undefined
 let ytVolKey = 0
@@ -1196,10 +1214,11 @@ function draw($: any, e: any) {
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
   if (!g0nShownIn(tab)) g0nShown = -1
-  else if (Image && e.surface === 'terminal' && !inHerdrApp) {
+  else if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f
-    out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source: { file: `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`, format: 'png' }, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
+    const source = imgSource($, `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`)
+    if (source) out.push(Box({ key: 'g0n', children: [Image({ key: 'g0n-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
   }
   out.push(
     Box({
@@ -1551,17 +1570,18 @@ function draw($: any, e: any) {
     const nowRows: any[] = []
     if (n) {
       if (cur?.id) void ytThumbFor($, cur.id)
-      const thumb = !!Image && !!cur?.id && ytThumb[cur.id] === 'ok' && w >= 34
+      const thumbSrc = Image && cur?.id && ytThumb[cur.id] === 'ok' && w >= 34 ? imgSource($, ytThumbPath(cur.id)) : undefined
+      const thumb = !!thumbSrc
       const tw = thumb ? w - 17 : w - 2
       const info: any[] = wrap2(cur?.title || n.title || 'cargando…', tw).map((line) => t([span(line, C.text, { bold: true })]))
       if (cur?.ch) info.push(t([span(clip(cur.ch, tw), C.muted)]))
       nowRows.push(
-        thumb && !inHerdrApp
+        thumb
           ? Box({
               key: 'yt-head',
               flexDirection: 'row',
               children: [
-                Image({ key: 'yt-thumb-' + cur!.id, source: { file: ytThumbPath(cur!.id), format: 'png' }, columns: 14, rows: 4, alt: '♪' }),
+                Image({ key: 'yt-thumb-' + cur!.id, source: thumbSrc, columns: 14, rows: 4, alt: '♪' }),
                 Box({ key: 'yt-info', flexDirection: 'column', marginLeft: 1, flexGrow: 1, children: info }),
               ],
             })
