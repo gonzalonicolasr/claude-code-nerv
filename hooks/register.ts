@@ -2554,16 +2554,21 @@ async function refreshEdd($: any) {
   edd = { present: true, root, counts, view, presence, presenceLocal, approvals, activeOnBranch, backlog, at: now() }
 }
 
+// forge escribe un state-<sesión>.json por sesión: acá se ve sólo el run de esta sesión.
+// El state.json viejo (compartido) sirve de respaldo para la config, nunca para el run.
 async function refreshForge($: any) {
   if (!home) return
-  const raw = await $.fs.read(`${home}/.local/state/forge/state.json`).catch(() => undefined)
-  if (typeof raw !== 'string') {
+  const sid = (await $.session.id().catch(() => '')) || sessionId
+  const own = sid ? await $.fs.read(`${home}/.local/state/forge/state-${sid}.json`).catch(() => undefined) : undefined
+  const raw = typeof own === 'string' && own ? own : await $.fs.read(`${home}/.local/state/forge/state.json`).catch(() => undefined)
+  if (typeof raw !== 'string' || !raw) {
     forge = undefined
     forgeMissing = true
     return
   }
   try {
-    forge = JSON.parse(raw)
+    const next = JSON.parse(raw)
+    forge = own === raw ? next : { ...next, run: null, others: [] }
     forgeMissing = false
   } catch {}
 }
@@ -3929,6 +3934,9 @@ function drawForge($: any, e: any, out: any[], h: any) {
     }),
   )
   if (run) out.push(t([span('» ', C.dim), span(clip(run.request, w), C.text)]))
+  const others: any[] = Array.isArray(forge.others) ? forge.others : []
+  if (others.length)
+    out.push(t([span('otros: ', C.dim), span(clip(`${others.length} corriendo (${others.map((o) => o.project || o.slug).join(', ')})`, w - 8), C.muted)]))
   const order: string[] = Array.isArray(forge.phaseOrder) && forge.phaseOrder.length ? forge.phaseOrder : PHASES
   const phases: any[] = run?.phases || order.map((name) => ({ name, status: 'pending', model: forge.models?.[name] || '' }))
   const node = (p: any) => {

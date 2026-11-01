@@ -111,8 +111,10 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
       ],
       verdicts: [],
     },
+    others: [{ slug: 'mejoras-de-fps', project: 'ascii-rpg', status: 'running' }],
   }
-  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state.json' ? JSON.stringify(state) : '' }))
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state-sesion.json' ? JSON.stringify(state) : '' }))
+  on('session.id', async () => ({ value: 'sesion' }))
   on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
   const sent: string[] = []
   on('command.run', { command: 'forge' }, async (_$: any, e: any) => {
@@ -124,7 +126,7 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await $.command.run({ command: 'nerv', args: 'forge' })
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   const drawn = JSON.stringify(await m.drawn())
-  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash · ag3', 'Claude Sonnet 5.5 ▾', 'personal']) expect(drawn).toContain(s)
+  for (const s of ['ENTRY PLUG', 'EXPLORE', 'VEREDICTO', 'OPERANDO', 'R 1/3', 'Gemini 3.7 Flash · ag3', 'Claude Sonnet 5.5 ▾', 'personal', 'otros: ', '1 corriendo (ascii-rpg)']) expect(drawn).toContain(s)
   await m.press({ key: 'profile-turbo' })
   expect(drawn).not.toContain('ddp-fmodel-veredicto-')
   await m.press({ key: 'ddh-fmodel-veredicto' })
@@ -146,6 +148,30 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   await m.press({ key: 'fcap-up' })
   await m.press({ key: 'fstop' })
   expect(sent).toEqual(['profile turbo', 'model veredicto prolite/gpt-6-luna', 'effort explore high', 'profile zero:solo-gemini', 'cap 4', 'stop'])
+})
+
+test('FORGE no muestra el run de otra sesión que quedó en el state.json compartido', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const shared = {
+    profile: 'barato',
+    profiles: { barato: { builtin: true, source: 'forge' } },
+    models: { explore: 'opus', plan: 'opus', build: 'opus', veredicto: 'opus' },
+    mode: 'automatic',
+    cap: 3,
+    catalog: { claude: ['opus'] },
+    run: { status: 'running', request: 'mejoras de fps', slug: 'mejoras-de-fps', round: 1, cap: 3, phase: 'build', startedAt: 0, phases: [], verdicts: [] },
+  }
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state.json' ? JSON.stringify(shared) : '' }))
+  on('session.id', async () => ({ value: 'otra' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'forge' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('EN ESPERA')
+  for (const x of ['OPERANDO', 'R 1/3', 'mejoras de fps']) expect(drawn).not.toContain(x)
 })
 
 test('FORGE separa fábrica, míos y zero-pi, y sus botones crean, restauran y borran perfiles', async ($, on) => {
