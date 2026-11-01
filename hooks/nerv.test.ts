@@ -150,6 +150,45 @@ test('la pestaña FORGE dibuja el run y sus botones mandan /forge', async ($, on
   expect(sent).toEqual(['profile turbo', 'model veredicto prolite/gpt-6-luna', 'effort explore high', 'profile zero:solo-gemini', 'cap 4', 'stop'])
 })
 
+test('FORGE dice si edita la config de esta sesión o el default, y la fija como default', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const state: any = {
+    profile: 'barato',
+    configScope: 'default',
+    profiles: { barato: { builtin: true, source: 'forge' } },
+    models: { explore: 'opus', plan: 'opus', build: 'opus', veredicto: 'opus' },
+    mode: 'automatic',
+    cap: 3,
+    catalog: { claude: ['opus'] },
+    run: null,
+  }
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.local/state/forge/state-sesion.json' ? JSON.stringify(state) : '' }))
+  on('session.id', async () => ({ value: 'sesion' }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  const sent: string[] = []
+  on('command.run', { command: 'forge' }, async (_$: any, e: any) => {
+    sent.push(e.args)
+    return { text: 'ok' }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'forge' })
+  let m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  let drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('PERFIL (default)')
+  expect(drawn).not.toContain('fp-default')
+  await m.unmount()
+  state.configScope = 'session'
+  await $.command.run({ command: 'nerv', args: 'forge' })
+  m = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain('PERFIL (esta sesión)')
+  await m.press({ key: 'fp-default' })
+  await m.press({ key: 'fp-undo' })
+  expect(sent).toEqual(['config save-default', 'config reset'])
+})
+
 test('FORGE no muestra el run de otra sesión que quedó en el state.json compartido', async ($, on) => {
   mock.env(on, { HOME: '/h' })
   mock.store(on)

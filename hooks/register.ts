@@ -4013,6 +4013,29 @@ function drawForge($: any, e: any, out: any[], h: any) {
   const curName = String(forge.profile || 'custom')
   const cur = forge.profiles?.[curName]
   const bar = (left: any[], right?: any) => Box({ key: 'fp-bar', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 1, children: [t(left), ...(right ? [right] : [])] })
+  // forge guarda una config por sesión: este panel edita la de esta sesión (o el default, si todavía no la cambió).
+  const mine = forge.configScope === 'session'
+  profileRows.push(
+    Box({
+      key: 'fp-scope',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      children: [
+        t([span(mine ? '(esta sesión)' : '(default)', mine ? C.cyan : C.muted, { bold: true }), span(mine ? ' · no toca otras sesiones' : ' · un cambio queda sólo en esta sesión', C.dim)]),
+        ...(mine
+          ? [
+              Box({
+                flexDirection: 'row',
+                children: [
+                  chip('fp-default', '★ fijar como default', false, C.tabBg, () => void forgeCmd($, 'config save-default', true)),
+                  chip('fp-undo', '↺ default', false, C.tabBg, () => void forgeCmd($, 'config reset', true)),
+                ],
+              }),
+            ]
+          : []),
+      ],
+    }),
+  )
   if (!cur) profileRows.push(bar([span('sin perfil', C.amber, { bold: true }), span(' · no se guarda', C.dim)], chip('fp-new-top', '+ guardar', false, C.tabBg, () => void askProfileName($))))
   else if (cur.source === 'zero-pi') profileRows.push(bar([span('cambios → ', C.dim), span('~/.pi/zero.json', C.muted)]))
   else if (cur.builtin && cur.modified) profileRows.push(bar([span('★ modificado', C.amber, { bold: true })], chip('fp-reset', '↺ restaurar', false, C.tabBg, () => void forgeCmd($, `profile reset ${curName}`, true))))
@@ -4049,7 +4072,7 @@ function drawForge($: any, e: any, out: any[], h: any) {
     }
   }
   const shown = String(forge.profile).replace(/^zero:/, 'zero-pi › ').replace(/personal-/, '')
-  out.push(h.scard('forge-profiles', `◈ PERFIL · ${clip(shown, w - 22)}`, C.purple, profileRows, 10))
+  out.push(h.scard('forge-profiles', `◈ PERFIL ${mine ? '(esta sesión)' : '(default)'} · ${clip(shown, w - 36)}`, C.purple, profileRows, 10))
 
   const catalog: Record<string, string[]> = forge.catalog || {}
   const levels: string[] = forge.effortLevels || ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh']
