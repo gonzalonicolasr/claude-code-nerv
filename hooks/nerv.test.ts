@@ -1566,3 +1566,126 @@ test('checkAppFocus si hc get falla no cambia away y reintenta al volver a funci
   expect((await state($)).away).toBe(true)
   expect(hc.length).toBe(3)
 })
+
+test('away no llama gh/sh y al volver lee cortex y refresca PRs; beat sigue escribiendo', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  const clock = mock.clock(on)
+  const mem: Record<string, unknown> = {}
+  const sets: string[] = []
+  on('store.get', async (_$: any, e: any) => ({ value: mem[e.key] }))
+  on('store.set', async (_$: any, e: any) => {
+    sets.push(e.key)
+    mem[e.key] = e.value
+    return { value: undefined }
+  })
+  on('store.delete', async (_$: any, e: any) => {
+    delete mem[e.key]
+    return { value: undefined }
+  })
+  on('session.id', async () => ({ value: 's1' }))
+  let cwdNow = ''
+  on('session.cwd', async () => ({ value: cwdNow }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let viewMtime = 0
+  let view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  let cxStat = 0
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: view.length, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/x/events.jsonl') { cxStat += 1; return { value: { kind: 'file', size: 100 + cxStat, mtimeMs: 100 + cxStat, isLink: false } } }
+    return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: view }
+    return { value: '' }
+  })
+  const gh: string[][] = []
+  const awk: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'hc' && a[1] === 'get') return { value: { exitCode: 0, stdout: JSON.stringify({ labels: { 'herdr.space': 'sp1', 'herdr.tab': 't1' } }), stderr: '' } }
+    if (a[0] === 'git' && a[1] === 'remote') return { value: { exitCode: 0, stdout: 'https://github.com/gonzalonicolasr/nerv.git', stderr: '' } }
+    if (a[0] === 'gh') { gh.push(a); if (a[1] === 'auth') return { value: { exitCode: 0, stdout: 'tok', stderr: '' } }; if (a[1] === 'api') return { value: { exitCode: 0, stdout: 'gonzalonicolasr', stderr: '' } }; return { value: { exitCode: 0, stdout: '[]', stderr: '' } } }
+    if (a[0] === 'sh' && a[2]?.includes('awk')) { awk.push(a); return { value: { exitCode: 0, stdout: '2026-10-09\n1\n', stderr: '' } } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  // oculta la terminal (space activo distinto)
+  view = JSON.stringify({ active: 'sp2', spaces: { sp1: 't1' } })
+  viewMtime = 1
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(true)
+  const ghAt = gh.length
+  const awkAt = awk.length
+  const sessionsAt = sets.filter((k) => k === 'sessions').length
+  cwdNow = '/tmp'
+  await clock.advance(181000)
+  expect(gh.length).toBe(ghAt)
+  expect(awk.length).toBe(awkAt)
+  expect(sets.filter((k) => k === 'sessions').length).toBeGreaterThan(sessionsAt)
+  // vuelve a la vista: un readCortexLog y un refreshPRs
+  view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  viewMtime = 2
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(false)
+  expect(awk.length).toBe(awkAt + 1)
+  expect(gh.length).toBe(ghAt + 3)
+})
+
+test('away: al volver sin 180 s no refresca PRs (prsAt reciente) pero sí lee cortex', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  const clock = mock.clock(on)
+  const mem: Record<string, unknown> = {}
+  on('store.get', async (_$: any, e: any) => ({ value: mem[e.key] }))
+  on('store.set', async (_$: any, e: any) => {
+    mem[e.key] = e.value
+    return { value: undefined }
+  })
+  on('store.delete', async (_$: any, e: any) => {
+    delete mem[e.key]
+    return { value: undefined }
+  })
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let viewMtime = 0
+  let view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  let cxStat = 0
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: view.length, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/x/events.jsonl') { cxStat += 1; return { value: { kind: 'file', size: 100 + cxStat, mtimeMs: 100 + cxStat, isLink: false } } }
+    return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: view }
+    return { value: '' }
+  })
+  const gh: string[][] = []
+  const awk: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'hc' && a[1] === 'get') return { value: { exitCode: 0, stdout: JSON.stringify({ labels: { 'herdr.space': 'sp1', 'herdr.tab': 't1' } }), stderr: '' } }
+    if (a[0] === 'git' && a[1] === 'remote') return { value: { exitCode: 0, stdout: 'https://github.com/gonzalonicolasr/nerv.git', stderr: '' } }
+    if (a[0] === 'gh') { gh.push(a); if (a[1] === 'auth') return { value: { exitCode: 0, stdout: 'tok', stderr: '' } }; if (a[1] === 'api') return { value: { exitCode: 0, stdout: 'gonzalonicolasr', stderr: '' } }; return { value: { exitCode: 0, stdout: '[]', stderr: '' } } }
+    if (a[0] === 'sh' && a[2]?.includes('awk')) { awk.push(a); return { value: { exitCode: 0, stdout: '2026-10-09\n1\n', stderr: '' } } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  view = JSON.stringify({ active: 'sp2', spaces: { sp1: 't1' } })
+  viewMtime = 1
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(true)
+  expect(gh.length).toBeGreaterThan(0) // refreshPRs del start ya corrió y dejó prsAt reciente
+  const ghAt = gh.length
+  const awkAt = awk.length
+  await clock.advance(20000)
+  expect(gh.length).toBe(ghAt)
+  expect(awk.length).toBe(awkAt)
+  view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  viewMtime = 2
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(false)
+  expect(awk.length).toBe(awkAt + 1)
+  expect(gh.length).toBe(ghAt)
+})

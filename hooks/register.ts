@@ -92,6 +92,7 @@ let wsBusy = false
 let prsWide = false
 let prError = ''
 let ghMe = ''
+let prsAt = 0
 let commitDays: Record<string, number> = {}
 let commitAuthor = ''
 let gitInfo: any = { ok: false, upstream: '', ahead: 0, behind: 0, dirty: 0, recent: [] }
@@ -527,6 +528,7 @@ async function refreshWidePRs($: any) {
 async function refreshPRs($: any) {
   const cwd = await $.session.cwd().catch(() => '')
   if (!cwd) return
+  prsAt = now()
   const env = await ghEnv($, cwd)
   if (!env) return refreshWidePRs($)
   prsWide = false
@@ -935,6 +937,8 @@ function setAway($: any, next: boolean) {
   if (was && !away) {
     startFast($)
     refreshLocal($)
+    void readCortexLog($)
+    if (now() - prsAt > 180000) refreshPRs($)
     $.ui.invalidate('ui.render')
   }
 }
@@ -4308,7 +4312,7 @@ export function register(on: any) {
     if (tab === 'models') void refreshModels($)
     await readCortexLog($)
     $.clock.every(3000, () => {
-      readCortexLog($)
+      if (!away) readCortexLog($)
     })
     startFast($)
     if (paneId)
@@ -4331,7 +4335,7 @@ export function register(on: any) {
       beat($)
     })
     $.clock.every(180000, () => {
-      if (!quiet) refreshPRs($)
+      if (!quiet && !away) refreshPRs($)
     })
     if (!quiet) await openPane($)
     return r
