@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1426,13 +1426,14 @@ test('/nerv debug suma stats y los contadores suben sin cambiar las claves vieja
   on('session.cwd', async () => ({ value: '/tmp' }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   let viewMtime = 0
+  let view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
   on('fs.stat', async (_$: any, e: any) => {
-    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: 40, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: view.length, mtimeMs: viewMtime, isLink: false } }
     if (e.path === '/x/events.jsonl') return { value: { kind: 'file', size: 100, mtimeMs: 100, isLink: false } }
     return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
   })
   on('fs.read', async (_$: any, e: any) => {
-    if (e.path === '/h/.config/herdr-app/view.json') return { value: JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } }) }
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: view }
     return { value: '' }
   })
   const gh: string[][] = []
@@ -1462,10 +1463,106 @@ test('/nerv debug suma stats y los contadores suben sin cambiar las claves vieja
   expect(st.paneOpen).toBe(true)
   expect(st.away).toBe(false)
   expect(typeof st.quiet).toBe('boolean')
-  // triangulación: otro cambio de view.json vuelve a contar hc get y más ticks siguen invalidando
+  // triangulación: otro cambio de view.json (space activo distinto) vuelve a contar hc get y más ticks siguen invalidando
+  view = JSON.stringify({ active: 'sp2', spaces: { sp1: 't1' } })
   viewMtime = 2
   await clock.advance(2100)
   const st2 = await state($)
   expect(st2.stats.hcGets).toBeGreaterThan(st.stats.hcGets)
   expect(st2.stats.invalidates).toBeGreaterThan(st.stats.invalidates)
+})
+
+test('imgSource devuelve el mismo objeto {png} para el mismo archivo y uno distinto para otro', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAJAAAACcCAYAAACQhCLDAAAAIGNIUg=='
+  const cache: Record<string, { png: string }> = {}
+  const a = pngSource(cache, 'a.png', PNG)
+  const b = pngSource(cache, 'a.png', PNG)
+  const c = pngSource(cache, 'b.png', PNG)
+  expect(a).toEqual({ png: PNG })
+  expect(a).toBe(b)
+  expect(c).not.toBe(a)
+})
+
+test('checkAppFocus cachea labels: sin cambio de estado no vuelve a llamar a hc get y el flip sí', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let viewMtime = 0
+  let view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: view.length, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/x/events.jsonl') return { value: { kind: 'file', size: 100, mtimeMs: 100, isLink: false } }
+    return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: view }
+    return { value: '' }
+  })
+  const hc: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'hc' && a[1] === 'get') { hc.push(a); return { value: { exitCode: 0, stdout: JSON.stringify({ labels: { 'herdr.space': 'sp1', 'herdr.tab': 't1' } }), stderr: '' } } }
+    if (a[0] === 'git' && a[1] === 'remote') return { value: { exitCode: 0, stdout: 'https://github.com/gonzalonicolasr/nerv.git', stderr: '' } }
+    if (a[0] === 'gh') { if (a[1] === 'auth') return { value: { exitCode: 0, stdout: 'tok', stderr: '' } }; if (a[1] === 'api') return { value: { exitCode: 0, stdout: 'gonzalonicolasr', stderr: '' } }; return { value: { exitCode: 0, stdout: '[]', stderr: '' } } }
+    if (a[0] === 'sh' && a[2]?.includes('awk')) return { value: { exitCode: 0, stdout: '2026-10-09\n1\n', stderr: '' } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect(hc.length).toBe(1)
+  expect((await state($)).away).toBe(false)
+  viewMtime = 1
+  await clock.advance(2100)
+  expect(hc.length).toBe(1)
+  view = JSON.stringify({ active: 'sp2', spaces: { sp1: 't1' } })
+  viewMtime = 2
+  await clock.advance(2100)
+  expect(hc.length).toBe(2)
+  expect((await state($)).away).toBe(true)
+})
+
+test('checkAppFocus si hc get falla no cambia away y reintenta al volver a funcionar', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let viewMtime = 0
+  let view = JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } })
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: view.length, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/x/events.jsonl') return { value: { kind: 'file', size: 100, mtimeMs: 100, isLink: false } }
+    return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: view }
+    return { value: '' }
+  })
+  let hcOk = true
+  const hc: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'hc' && a[1] === 'get') { hc.push(a); return { value: { exitCode: hcOk ? 0 : 1, stdout: hcOk ? JSON.stringify({ labels: { 'herdr.space': 'sp1', 'herdr.tab': 't1' } }) : '', stderr: '' } } }
+    if (a[0] === 'git' && a[1] === 'remote') return { value: { exitCode: 0, stdout: 'https://github.com/gonzalonicolasr/nerv.git', stderr: '' } }
+    if (a[0] === 'gh') { if (a[1] === 'auth') return { value: { exitCode: 0, stdout: 'tok', stderr: '' } }; if (a[1] === 'api') return { value: { exitCode: 0, stdout: 'gonzalonicolasr', stderr: '' } }; return { value: { exitCode: 0, stdout: '[]', stderr: '' } } }
+    if (a[0] === 'sh' && a[2]?.includes('awk')) return { value: { exitCode: 0, stdout: '2026-10-09\n1\n', stderr: '' } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect((await state($)).away).toBe(false)
+  hcOk = false
+  view = JSON.stringify({ active: 'sp2', spaces: { sp1: 't1' } })
+  viewMtime = 1
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(false)
+  expect(hc.length).toBe(2)
+  hcOk = true
+  await clock.advance(2100)
+  expect((await state($)).away).toBe(true)
+  expect(hc.length).toBe(3)
 })

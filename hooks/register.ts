@@ -168,17 +168,24 @@ let runDir = '/tmp'
 // (t=f → EINVAL unsupported medium): ahí las imágenes van como bytes PNG, leídos una vez.
 let inHerdrApp = false
 const imgBytes: Record<string, string> = {}
+const imgObj: Record<string, { png: string }> = {}
+// Un mismo archivo devuelve el mismo objeto {png}: así el diff de la app no reenvía el PNG en cada render.
+export const pngSource = (cache: Record<string, { png: string }>, file: string, b: string) =>
+  (cache[file] ??= { png: b })
 function imgSource($: any, file: string) {
   if (!inHerdrApp) return { file, format: 'png' }
   const b = imgBytes[file]
-  if (b) return { png: b }
+  if (b) return pngSource(imgObj, file, b)
   if (b === undefined) {
     imgBytes[file] = ''
     $.fs
       .read(file, { as: 'bytes' })
       .then((r: any) => {
         imgBytes[file] = r?.base64 || ''
-        if (imgBytes[file]) $.ui.invalidate('ui.render')
+        if (imgBytes[file]) {
+          pngSource(imgObj, file, imgBytes[file])
+          $.ui.invalidate('ui.render')
+        }
       })
       .catch(() => undefined)
   }
@@ -896,13 +903,18 @@ async function checkFocus($: any) {
 // En la Herdr app no hay HERDR_PANE_ID: la terminal está a la vista si su space es el activo y su
 // tab es la activa de ese space (view.json de la app + labels herdr.space/herdr.tab de herdr-core).
 // Sin esto las ~20 sesiones escondidas redibujaban el pane a 8 Hz cada una y colgaban la máquina.
-let appView = { mtime: -1, space: '', tab: '' }
+let appView = { mtime: -1, space: '', tab: '', at: 0 }
 async function checkAppFocus($: any) {
   const path = `${home}/.config/herdr-app/view.json`
   const st = await $.fs.stat(path).catch(() => undefined)
   if (!st || st.mtimeMs === appView.mtime) return
   try {
     const view = JSON.parse(String((await $.fs.read(path).catch(() => '')) || '{}'))
+    const nextAway = !(appView.space && view.active === appView.space && view.spaces?.[appView.space] === appView.tab)
+    if (appView.space && now() - appView.at <= 30000 && nextAway === away) {
+      appView.mtime = st.mtimeMs
+      return
+    }
     const id = String((await $.env.get('HC_TERMINAL_ID').catch(() => '')) || '')
     let r: any
     if (id) {
@@ -911,7 +923,7 @@ async function checkAppFocus($: any) {
     }
     if (r?.exitCode !== 0) return
     const labels = JSON.parse(r.stdout)?.labels || {}
-    appView = { mtime: st.mtimeMs, space: String(labels['herdr.space'] || ''), tab: String(labels['herdr.tab'] || '') }
+    appView = { mtime: st.mtimeMs, space: String(labels['herdr.space'] || ''), tab: String(labels['herdr.tab'] || ''), at: now() }
     setAway($, !(appView.space && view.active === appView.space && view.spaces?.[appView.space] === appView.tab))
   } catch {}
 }
