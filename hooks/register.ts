@@ -57,6 +57,7 @@ let quiet = false
 let placedOnce = false
 let paneOpen = false
 let away = false
+const stats = { invalidates: 0, hcGets: 0, ghRuns: 0, awkRuns: 0 }
 let fast: { cancel: () => void }[] = []
 let tab = 'magi'
 let pinned = ''
@@ -499,8 +500,10 @@ async function refreshWidePRs($: any) {
   const users = String(who?.stdout || '').split('\n').filter(Boolean)
   const all: any[] = []
   for (const u of users) {
+    stats.ghRuns++
     const t = await $.process.run(['gh', 'auth', 'token', '--user', u], { timeoutMs: 5000 }).catch(() => undefined)
     if (t?.exitCode !== 0) continue
+    stats.ghRuns++
     const r = await $.process
       .run(['gh', 'search', 'prs', '--author', '@me', '--state', 'open', '--limit', '15', '--json', 'repository,number,title,url,isDraft'], { env: { GH_TOKEN: t.stdout.trim() }, timeoutMs: 20000 })
       .catch(() => undefined)
@@ -521,9 +524,11 @@ async function refreshPRs($: any) {
   if (!env) return refreshWidePRs($)
   prsWide = false
   if (!ghMe) {
+    stats.ghRuns++
     const me = await $.process.run(['gh', 'api', 'user', '-q', '.login'], { cwd, env, timeoutMs: 10000 }).catch(() => undefined)
     ghMe = me?.exitCode === 0 ? me.stdout.trim() : ''
   }
+  stats.ghRuns++
   const r = await $.process
     .run(['gh', 'pr', 'list', '--state', 'open', '--limit', '20', '--json', 'number,title,reviewDecision,isDraft,statusCheckRollup,url,author'], { cwd, env, timeoutMs: 20000 })
     .catch((err: any) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
@@ -899,7 +904,11 @@ async function checkAppFocus($: any) {
   try {
     const view = JSON.parse(String((await $.fs.read(path).catch(() => '')) || '{}'))
     const id = String((await $.env.get('HC_TERMINAL_ID').catch(() => '')) || '')
-    const r = id ? await $.process.run(['hc', 'get', id, '--json'], { timeoutMs: 3000 }).catch(() => undefined) : undefined
+    let r: any
+    if (id) {
+      stats.hcGets++
+      r = await $.process.run(['hc', 'get', id, '--json'], { timeoutMs: 3000 }).catch(() => undefined)
+    }
     if (r?.exitCode !== 0) return
     const labels = JSON.parse(r.stdout)?.labels || {}
     appView = { mtime: st.mtimeMs, space: String(labels['herdr.space'] || ''), tab: String(labels['herdr.tab'] || '') }
@@ -939,7 +948,7 @@ function startFast($: any) {
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (tab === 'models' && frame % 480 === 0) void refreshModels($)
       if ((tab === 'models' || acctMenu) && frame % 24 === 0) void cpamWatch($)
-      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) $.ui.invalidate('ui.render')
+      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) { stats.invalidates++; $.ui.invalidate('ui.render') }
     }),
     $.clock.every(50, () => {
       if (quiet || !paneOpen || away || tab !== 'magi' || folded.has('sync') || !gauges.length) return
@@ -947,6 +956,7 @@ function startFast($: any) {
     }),
     $.clock.every(G0N_MS / 2, () => {
       if (quiet || !paneOpen || away || g0nShown < 0 || g0nFrame() === g0nShown) return
+      stats.invalidates++
       $.ui.invalidate('ui.render')
     }),
   )
@@ -2784,6 +2794,7 @@ async function readCortexLog($: any) {
     }
     if (cxLog.primed && st.mtimeMs === cxLog.mtime && st.size === cxLog.size) return
     const reset = !cxLog.primed || st.size < cxLog.size
+    stats.awkRuns++
     const r = await $.process.run(['sh', '-c', CX_AWK, 'sh', String(reset ? 1 : cxLog.line + 1), reset ? '1' : '0', cxLog.path], { timeoutMs: 5000 }).catch(() => undefined)
     if (r?.exitCode !== 0) return
     const rows = String(r.stdout || '').split('\n').filter(Boolean)
@@ -4332,7 +4343,7 @@ export function register(on: any) {
     }
     if (arg === 'debug') {
       const panes = await $.ui.panes().catch((err: any) => String(err))
-      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, away, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet }
+      const st = { scroll: { bodyOffset, bodyMax, lastView, lastContent }, paneOpen, away, tab, unverified: unverified.size, patternBlue: patternBlue?.count || 0, confetti: now() < confettiUntil, tasks: [...tasks.values()].map((x) => x.status || 'running'), recap: !!recap, effort: effort ?? null, effortLevel: effortLevel(), effortPick: effortPick ?? null, theme: themeId, quiet, stats }
       return { text: 'nerv debug: ' + JSON.stringify(st) + ' panes=' + JSON.stringify(panes) }
     }
     if (arg.startsWith('cuenta')) {

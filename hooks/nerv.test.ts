@@ -1417,3 +1417,55 @@ test('SIDE CHAT: si todavía no hay turno para forkear lo dice en vez de quedars
   expect(drawn).toContain('todavía no hay')
   expect(drawn).not.toContain('pensando')
 })
+
+test('/nerv debug suma stats y los contadores suben sin cambiar las claves viejas', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let viewMtime = 0
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: { kind: 'file', size: 40, mtimeMs: viewMtime, isLink: false } }
+    if (e.path === '/x/events.jsonl') return { value: { kind: 'file', size: 100, mtimeMs: 100, isLink: false } }
+    return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async (_$: any, e: any) => {
+    if (e.path === '/h/.config/herdr-app/view.json') return { value: JSON.stringify({ active: 'sp1', spaces: { sp1: 't1' } }) }
+    return { value: '' }
+  })
+  const gh: string[][] = []
+  const awk: string[][] = []
+  const hc: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'hc' && a[1] === 'get') { hc.push(a); return { value: { exitCode: 0, stdout: JSON.stringify({ labels: { 'herdr.space': 'sp1', 'herdr.tab': 't1' } }), stderr: '' } } }
+    if (a[0] === 'git' && a[1] === 'remote') return { value: { exitCode: 0, stdout: 'https://github.com/gonzalonicolasr/nerv.git', stderr: '' } }
+    if (a[0] === 'gh') { gh.push(a); if (a[1] === 'auth') return { value: { exitCode: 0, stdout: 'tok', stderr: '' } }; if (a[1] === 'api') return { value: { exitCode: 0, stdout: 'gonzalonicolasr', stderr: '' } }; return { value: { exitCode: 0, stdout: '[]', stderr: '' } } }
+    if (a[0] === 'sh' && a[2]?.includes('awk')) { awk.push(a); return { value: { exitCode: 0, stdout: '2026-10-09\n1\n', stderr: '' } } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  viewMtime = 1
+  await clock.advance(2100)
+  await clock.advance(1000)
+  const st = await state($)
+  expect(st.stats).toBeDefined()
+  expect(Object.keys(st.stats).sort()).toEqual(['awkRuns', 'ghRuns', 'hcGets', 'invalidates'])
+  expect(st.stats.ghRuns).toBeGreaterThan(0)
+  expect(st.stats.awkRuns).toBeGreaterThan(0)
+  expect(st.stats.hcGets).toBeGreaterThan(0)
+  expect(st.stats.invalidates).toBeGreaterThan(0)
+  // claves viejas intactas
+  expect(st.paneOpen).toBe(true)
+  expect(st.away).toBe(false)
+  expect(typeof st.quiet).toBe('boolean')
+  // triangulación: otro cambio de view.json vuelve a contar hc get y más ticks siguen invalidando
+  viewMtime = 2
+  await clock.advance(2100)
+  const st2 = await state($)
+  expect(st2.stats.hcGets).toBeGreaterThan(st.stats.hcGets)
+  expect(st2.stats.invalidates).toBeGreaterThan(st.stats.invalidates)
+})
