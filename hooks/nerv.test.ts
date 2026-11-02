@@ -1483,6 +1483,48 @@ test('imgSource devuelve el mismo objeto {png} para el mismo archivo y uno disti
   expect(c).not.toBe(a)
 })
 
+test('imgSource en la Herdr app (camino de producción) devuelve {png} y lee el cuadro una sola vez', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
+  mock.store(on)
+  const clock = mock.clock(on, { now: 0 })
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAJAAAACcCAYAAACQhCLDAAAAIGNIUg=='
+  const reads: string[] = []
+  on('fs.read', async (_$: any, e: any) => {
+    if (String(e.path).includes('/assets/g0n/')) { reads.push(String(e.path)); return { value: { base64: PNG } } }
+    return { value: '' }
+  })
+  on('fs.stat', async () => ({ value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  const sources: any[] = []
+  on('ui.resolve', { component: 'Pane' }, async (_$: any, e: any, next: any) => {
+    const table = await next(e)
+    const Image = table.Image
+    return { ...table, Image: (props: any) => { if (props.key === 'g0n-img') sources.push(props.source); return Image ? Image(props) : undefined } }
+  })
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+
+  // Con HC_TERMINAL_ID el hook de render usa imgSource → lee los bytes PNG y
+  // deja el objeto {png} cacheado en imgObj; el redibujo posterior lo reusa.
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  for (let i = 0; i < 40 && sources.length < 1; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(sources.length).toBeGreaterThanOrEqual(1)
+  expect(sources[0]).toEqual({ png: PNG })
+  expect(reads.filter((p) => p.includes('/assets/g0n/'))).toHaveLength(1)
+  await clock.advance(0)
+  await m.unmount()
+  const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  for (let i = 0; i < 40 && sources.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(sources.length).toBeGreaterThanOrEqual(2)
+  expect(sources[1]).toEqual({ png: PNG })
+  // Cada archivo PNG se lee una sola vez (cache imgBytes), sin relecturas.
+  expect(new Set(reads).size).toBe(reads.length)
+  await n.unmount()
+})
+
 test('checkAppFocus cachea labels: sin cambio de estado no vuelve a llamar a hc get y el flip sí', async ($, on) => {
   mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
   mock.store(on)
