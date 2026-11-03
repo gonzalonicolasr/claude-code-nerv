@@ -3129,6 +3129,7 @@ const mdlRank = (g: { key: string; prefix: string }) => {
   if (!g.prefix) return 1 + Object.keys(FAMILY_LABEL).indexOf(g.key)
   const ag = /^ag(\d*)$/.exec(g.prefix)
   if (ag) return 10 + Number(ag[1] || 1)
+  if (g.prefix === 'mw') return 2
   return g.prefix === 'wibond' ? 99 : 50
 }
 export const mdlGroups = (ids: readonly string[], emails: Record<string, string> = {}): MdlGroup[] => {
@@ -3138,7 +3139,7 @@ export const mdlGroups = (ids: readonly string[], emails: Record<string, string>
     const key = prefix ? 'p:' + prefix : mdlFamily(name)
     if (!by.has(key)) {
       const who = emails[prefix] ? ' · ' + emails[prefix].split('@')[0] : ''
-      const label = prefix === 'nan' ? 'NaN' : prefix === 'ds' ? 'DeepSeek (API oficial)' : prefix === 'refuseless' ? 'Refuseless (abliterated)' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
+      const label = prefix === 'nan' ? 'NaN' : prefix === 'ds' ? 'DeepSeek (API oficial)' : prefix === 'refuseless' ? 'Refuseless (abliterated)' : prefix === 'mw' ? 'MWAPI (Claude)' : prefix === 'wibond' ? 'Wibond (trabajo)' : /^ag\d*$/.test(prefix) ? `Google ${prefix}${who}` : prefix ? prefix + who : FAMILY_LABEL[key] || key
       by.set(key, { key: prefix ? prefix : key, label, prefix, models: [] })
     }
     by.get(key)!.models.push(id)
@@ -3548,7 +3549,7 @@ function drawModels($: any, e: any, out: any[], h: any) {
     return rows
   }
   for (const g of groups) {
-    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : g.prefix === 'ds' ? C.amber : g.prefix === 'refuseless' ? C.pink : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
+    const color = g.prefix === 'wibond' ? C.red : g.prefix === 'nan' ? C.lime : g.prefix === 'ds' ? C.amber : g.prefix === 'refuseless' ? C.pink : g.prefix === 'mw' ? C.orange : /^ag/.test(g.prefix) ? C.cyan : g.key === 'claude' ? C.orange : C.violet
     const picked = mdlPick && g.models.includes(mdlPick) ? mdlPick : ''
     out.push(
       card('mdl-' + g.key, `${g.label}${g.prefix ? ' · ' + g.prefix + '/' : ''} (${g.models.length})`, picked && mdlSplit(picked).prefix === 'wibond' ? C.red : color, [
