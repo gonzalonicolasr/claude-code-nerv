@@ -4028,12 +4028,14 @@ function drawForge($: any, e: any, out: any[], h: any) {
   const zero = all.filter(([, p]) => p.source === 'zero-pi').map(([n]) => n)
   const zgroup = (n: string) => {
     const k = n.replace(/^zero:/, '')
+    if (/^puro-/.test(k)) return 'ZERO-PI · PUROS'
+    if (/^mix-/.test(k)) return 'ZERO-PI · MEZCLADOS'
     if (/^solo-/.test(k)) return 'ZERO-PI · UN MODELO'
     if (/economico/.test(k)) return 'ZERO-PI · ECONÓMICOS'
     if (/adversarial|veredicto-claude-codex|revisa|review/.test(k)) return 'ZERO-PI · REVISIÓN'
     return 'ZERO-PI · COMBINADOS'
   }
-  for (const g of ['ZERO-PI · UN MODELO', 'ZERO-PI · ECONÓMICOS', 'ZERO-PI · REVISIÓN', 'ZERO-PI · COMBINADOS']) {
+  for (const g of ['ZERO-PI · PUROS', 'ZERO-PI · MEZCLADOS', 'ZERO-PI · UN MODELO', 'ZERO-PI · ECONÓMICOS', 'ZERO-PI · REVISIÓN', 'ZERO-PI · COMBINADOS']) {
     const names = zero.filter((n) => zgroup(n) === g).sort()
     if (names.length) sections.push({ title: g, names })
   }

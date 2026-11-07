@@ -223,6 +223,8 @@ test('FORGE separa fábrica, míos y zero-pi, y sus botones crean, restauran y b
       turbo: { builtin: true, modified: false, source: 'forge' },
       mio: { builtin: false, modified: false, source: 'forge' },
       'zero:solo-claude': { builtin: false, modified: false, source: 'zero-pi' },
+      'zero:puro-codex': { builtin: false, modified: false, source: 'zero-pi' },
+      'zero:mix-adversarial': { builtin: false, modified: false, source: 'zero-pi' },
     },
     efforts: {},
     effortLevels: ['auto', 'low', 'high'],
@@ -258,6 +260,10 @@ test('FORGE separa fábrica, míos y zero-pi, y sus botones crean, restauran y b
     for (const x of ['FÁBRICA', 'MÍOS', 'ZERO-PI · UN MODELO', '★ modificado', '● barato ★', '"label":"turbo"', '+ nuevo', '↺ restaurar']) expect(drawn).toContain(x)
     expect(at('FÁBRICA') < at('MÍOS') && at('MÍOS') < at('ZERO-PI')).toBe(true)
     expect(at('"label":"mio"') > at('MÍOS') && at('"label":"mio"') < at('ZERO-PI')).toBe(true)
+    // los perfiles puro-*/mix-* de zero.json tienen su sección; mix-adversarial no cae en REVISIÓN
+    expect(at('ZERO-PI · PUROS') < at('"label":"puro codex"') && at('"label":"puro codex"') < at('ZERO-PI · MEZCLADOS')).toBe(true)
+    expect(at('ZERO-PI · MEZCLADOS') < at('"label":"mix adversarial"') && at('"label":"mix adversarial"') < at('ZERO-PI · UN MODELO')).toBe(true)
+    expect(drawn).not.toContain('ZERO-PI · REVISIÓN')
     expect(drawn).not.toContain('fp-delete')
     await m.unmount()
   }
