@@ -4030,12 +4030,13 @@ function drawForge($: any, e: any, out: any[], h: any) {
     const k = n.replace(/^zero:/, '')
     if (/^puro-/.test(k)) return 'ZERO-PI · PUROS'
     if (/^mix-/.test(k)) return 'ZERO-PI · MEZCLADOS'
+    if (/^rev-/.test(k)) return 'ZERO-PI · REVISIÓN'
     if (/^solo-/.test(k)) return 'ZERO-PI · UN MODELO'
     if (/economico/.test(k)) return 'ZERO-PI · ECONÓMICOS'
     if (/adversarial|veredicto-claude-codex|revisa|review/.test(k)) return 'ZERO-PI · REVISIÓN'
     return 'ZERO-PI · COMBINADOS'
   }
-  for (const g of ['ZERO-PI · PUROS', 'ZERO-PI · MEZCLADOS', 'ZERO-PI · UN MODELO', 'ZERO-PI · ECONÓMICOS', 'ZERO-PI · REVISIÓN', 'ZERO-PI · COMBINADOS']) {
+  for (const g of ['ZERO-PI · PUROS', 'ZERO-PI · MEZCLADOS', 'ZERO-PI · REVISIÓN', 'ZERO-PI · UN MODELO', 'ZERO-PI · ECONÓMICOS', 'ZERO-PI · COMBINADOS']) {
     const names = zero.filter((n) => zgroup(n) === g).sort()
     if (names.length) sections.push({ title: g, names })
   }
@@ -4088,7 +4089,8 @@ function drawForge($: any, e: any, out: any[], h: any) {
             const bad = broken(forge.profiles[n])
             const mod = !!forge.profiles[n]?.modified
             const on = forge.profile === n
-            const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/-/g, ' ')
+            // la sección ya nombra la categoría: el prefijo puro-/mix-/rev- no ocupa la columna
+            const label = n.replace(/^zero:/, '').replace(/^personal-/, '').replace(/^(puro|mix|rev)-/, '').replace(/-/g, ' ')
             return Box({
               key: 'pg-' + n,
               width: colW,
