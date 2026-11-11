@@ -983,7 +983,7 @@ function startFast($: any) {
       if (orqView) {
         // Con la solapa ORQ a la vista no se dibuja nada de NERV: sólo el estado y, si hay algo animándose, el redibujo.
         if (frame % 8 === 0) void refreshOrq($)
-        if (orqLive(orqState)) { stats.invalidates++; $.ui.invalidate('ui.render') }
+        if (orqLive(orqVista(orqState, orqPropio, working))) { stats.invalidates++; $.ui.invalidate('ui.render') }
         return
       }
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
@@ -1119,6 +1119,12 @@ let orqOn = false
 let orqView = false
 let orqRaw = ''
 let orqCmd = 'orq estado --json'
+// Con el comando de siempre cada sesión pide solo sus workers (`--sesion`) y el orquestador es ella misma.
+let orqPropio = true
+const orqArgv = () => [...orqCmd.trim().split(/\s+/), ...(orqPropio && sessionId ? ['--sesion', sessionId] : [])]
+// Lo que se dibuja: en modo propio el "orquestador" es esta sesión, así que piensa cuando ella trabaja.
+export const orqVista = (st: OrqState | undefined, propio: boolean, trabajando: boolean): OrqState | undefined =>
+  st && propio ? { ...st, orquestador: trabajando ? 'working' : 'idle' } : st
 let orqState: OrqState | undefined
 let orqBusy = false
 
@@ -1311,7 +1317,7 @@ export const orqDraw = (ancho: number, st: OrqState | undefined, cuadro: number)
 async function refreshOrq($: any) {
   if (orqBusy) return
   orqBusy = true
-  const r = await $.process.run(orqCmd.trim().split(/\s+/), { timeoutMs: 3000 }).catch(() => undefined)
+  const r = await $.process.run(orqArgv(), { timeoutMs: 3000 }).catch(() => undefined)
   orqBusy = false
   const raw = r?.exitCode === 0 ? String(r.stdout) : ''
   if (raw === orqRaw) return
@@ -1322,7 +1328,7 @@ async function refreshOrq($: any) {
 
 // Fuera del orquestador: una sola consulta al arrancar para saber si hay `orq`; si contesta, aparecen las solapas.
 async function probeOrq($: any) {
-  const r = await $.process.run(orqCmd.trim().split(/\s+/), { timeoutMs: 3000 }).catch(() => undefined)
+  const r = await $.process.run(orqArgv(), { timeoutMs: 3000 }).catch(() => undefined)
   if (r?.exitCode !== 0 || !orqParse(String(r.stdout))) return
   orqOn = true
   $.ui.invalidate('ui.render')
@@ -1528,7 +1534,7 @@ function draw($: any, e: any) {
       if (source) banner.push(Box({ key: 'orq-banner', children: [Image({ key: 'orq-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
     }
     const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, tail: C.violet, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
-    const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqState, frame)
+    const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqVista(orqState, orqPropio, working), frame)
     // Corta la fila en tramos del mismo color, sin los espacios del final.
     const runs = (row: OrqCell[], from: number, to: number) => {
       const parts: any[] = []
@@ -4606,7 +4612,9 @@ export function register(on: any) {
     // En la sesión del orquestador arranca en ORQ. En cualquier otra, la solapa aparece si `orq` contesta
     // (arranca en NERV y no se pide estado hasta entrar). NERV_ORQ=0 la apaga en esa sesión.
     const orqRol = (await $.env.get('ORQ_ROL').catch(() => '')) === 'orquestador'
-    orqCmd = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '') || orqCmd
+    const orqCustom = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '')
+    orqPropio = !orqCustom
+    orqCmd = orqCustom || orqCmd
     orqOn = orqRol
     orqView = orqRol
     if (orqRol) void refreshOrq($)

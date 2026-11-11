@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1856,8 +1856,9 @@ test('orqDraw sin datos, sin workers y con muchas skills', () => {
   expect(txt.slice(4, 10).map((l) => l.slice(0, 15).trimEnd())).toEqual(['   ┗━▶╭─ a ────', '      │ ┄ a', '      │ ┄ b', '      │ ┄ c', '      │ ┄ +3 má', '      ╰────────'])
 })
 
-const orqSession = async ($: any, on: any, env: Record<string, string>, stdout: () => string) => {
+const orqSession = async ($: any, on: any, env: Record<string, string>, stdout: () => string, sesion = '') => {
   mock.env(on, { HOME: '/h', ...env })
+  if (sesion) on('session.id', async () => ({ value: sesion }))
   mock.store(on)
   const clock = mock.clock(on)
   const asked: string[][] = []
@@ -1958,6 +1959,24 @@ test('en cualquier sesión, si orq contesta aparecen las solapas: arranca en NER
   text = JSON.stringify(await m.drawn())
   expect(text).toContain('◆ orquestador')
   expect(text).toContain('login')
+})
+
+test('cada sesión pide sólo sus workers y es su propio orquestador', async ($, on) => {
+  const { m, clock, asked } = await orqSession($, on, {}, () => JSON.stringify({ ...ORQ_JSON, orquestador: 'idle' }), 'ses-1')
+  await clock.advance(3000)
+  await $.command.run({ command: 'nerv', args: 'orq' })
+  const pedidos = asked.filter((a) => a[0] === 'orq')
+  expect(pedidos.length).toBeGreaterThan(0)
+  for (const a of pedidos) expect(a).toEqual(['orq', 'estado', '--json', '--sesion', 'ses-1'])
+  expect(JSON.stringify(await m.drawn())).toContain('login')
+})
+
+test('orqVista: en modo propio el orquestador piensa cuando la sesión trabaja; con comando propio no se toca', () => {
+  const st = orqParse(JSON.stringify({ ...ORQ_JSON, orquestador: 'working' }))!
+  expect(orqVista(st, true, false)!.orquestador).toBe('idle')
+  expect(orqVista(st, true, true)!.orquestador).toBe('working')
+  expect(orqVista({ ...st, orquestador: 'idle' }, false, true)!.orquestador).toBe('idle')
+  expect(orqVista(undefined, true, true)).toBeUndefined()
 })
 
 const orqApagado = async ($: any, on: any, env: Record<string, string>, out: string) => {
