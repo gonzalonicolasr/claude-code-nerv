@@ -1479,7 +1479,8 @@ function draw($: any, e: any) {
     if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
-  if (!g0nShownIn(tab)) g0nShown = -1
+  // En la Herdr app el cartel g0n ya está en la barra lateral (mod nerv-g0n): acá quedaría repetido.
+  if (!g0nShownIn(tab) || inHerdrApp) g0nShown = -1
   else if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f

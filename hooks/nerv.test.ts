@@ -1491,7 +1491,7 @@ test('imgSource devuelve el mismo objeto {png} para el mismo archivo y uno disti
   expect(c).not.toBe(a)
 })
 
-test('imgSource en la Herdr app (camino de producción) devuelve {png} y lee el cuadro una sola vez', async ($, on) => {
+test('en la Herdr app el panel no repite el cartel g0n: ya está en la barra lateral de la app', async ($, on) => {
   mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't1', CORTEX_RECALL_EVENTS: '/x/events.jsonl' })
   mock.store(on)
   const clock = mock.clock(on, { now: 0 })
@@ -1515,22 +1515,14 @@ test('imgSource en la Herdr app (camino de producción) devuelve {png} y lee el 
   })
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
 
-  // Con HC_TERMINAL_ID el hook de render usa imgSource → lee los bytes PNG y
-  // deja el objeto {png} cacheado en imgObj; el redibujo posterior lo reusa.
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
-  for (let i = 0; i < 40 && sources.length < 1; i++) await new Promise((r) => setTimeout(r, 10))
-  expect(sources.length).toBeGreaterThanOrEqual(1)
-  expect(sources[0]).toEqual({ png: PNG })
-  expect(reads.filter((p) => p.includes('/assets/g0n/'))).toHaveLength(1)
-  await clock.advance(0)
+  await clock.advance(1000)
+  const drawn = JSON.stringify(await m.drawn())
+  expect(drawn).toContain(' NERV ')
+  expect(drawn).not.toContain('g0n-img')
+  expect(sources).toHaveLength(0)
+  expect(reads).toHaveLength(0)
   await m.unmount()
-  const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
-  for (let i = 0; i < 40 && sources.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
-  expect(sources.length).toBeGreaterThanOrEqual(2)
-  expect(sources[1]).toEqual({ png: PNG })
-  // Cada archivo PNG se lee una sola vez (cache imgBytes), sin relecturas.
-  expect(new Set(reads).size).toBe(reads.length)
-  await n.unmount()
 })
 
 test('checkAppFocus cachea labels: sin cambio de estado no vuelve a llamar a hc get y el flip sí', async ($, on) => {
