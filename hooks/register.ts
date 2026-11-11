@@ -955,6 +955,7 @@ function startFast($: any) {
       frame++
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen || away) return
+      if (orqOn && g0nShownIn(tab) && frame % 8 === 0) void refreshOrq($)
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'live' && frame % 12 === 0) void refreshLive($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
@@ -964,7 +965,7 @@ function startFast($: any) {
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (tab === 'models' && frame % 480 === 0) void refreshModels($)
       if ((tab === 'models' || acctMenu) && frame % 24 === 0) void cpamWatch($)
-      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) { stats.invalidates++; $.ui.invalidate('ui.render') }
+      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0 || (orqOn && orqLive(orqState))) { stats.invalidates++; $.ui.invalidate('ui.render') }
     }),
     $.clock.every(50, () => {
       if (quiet || !paneOpen || away || tab !== 'magi' || folded.has('sync') || !gauges.length) return
@@ -1065,6 +1066,153 @@ const g0nFrame = () => Math.floor(now() / G0N_MS) % G0N_FRAMES
 export const g0nShownIn = (tabId: string) => tabId !== 'live'
 // El medidor de EFFORT de abajo también se oculta en EN VIVO: esas filas van a las cámaras.
 export const effortShownIn = (tabId: string) => tabId !== 'live'
+
+// Flujo del orquestador: sólo en la sesión con ORQ_ROL=orquestador, en el lugar del cartel g0n.
+// El estado sale de `orq estado --json` (o de ORQ_ESTADO_CMD) más o menos una vez por segundo.
+export type OrqEstado = 'working' | 'idle' | 'done' | 'blocked' | 'unknown' | 'cerrado'
+export type OrqSkill = { nombre: string; cargada: boolean; reciente: boolean }
+export type OrqWorker = { nombre: string; tipo: string; estado: OrqEstado; signo: string; texto: string; tiempo: string; skills: OrqSkill[] }
+export type OrqState = { orquestador: OrqEstado; workers: OrqWorker[] }
+export type OrqTone = 'text' | 'dim' | 'line' | 'pulse' | 'orq' | 'work' | 'ok' | 'bad' | 'gray' | 'hot'
+export type OrqCell = { ch: string; tone: OrqTone; bold: boolean }
+const ORQ_ESTADOS = ['working', 'idle', 'done', 'blocked', 'unknown', 'cerrado']
+export const ORQ_MAX = 3
+// Filas de skills por worker: si hay más, la última dice cuántas faltan.
+export const ORQ_SKILLS = 4
+const ORQ_SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+// Verde fijo para "terminó": el `lime` del tema es amarillo o gris en varias unidades.
+const ORQ_GREEN = '#4ade80'
+let orqOn = false
+let orqCmd = 'orq estado --json'
+let orqState: OrqState | undefined
+let orqBusy = false
+
+export const orqParse = (raw: string): OrqState | undefined => {
+  let j: any
+  try {
+    j = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (!j || typeof j !== 'object' || !Array.isArray(j.workers)) return undefined
+  const est = (v: any): OrqEstado => (ORQ_ESTADOS.includes(v) ? v : 'unknown')
+  const str = (v: any) => (typeof v === 'string' ? v : '')
+  return {
+    orquestador: est(j.orquestador),
+    workers: j.workers
+      .filter((w: any) => w && typeof w.nombre === 'string' && w.nombre)
+      .slice(0, ORQ_MAX)
+      .map((w: any) => ({
+        nombre: w.nombre,
+        tipo: str(w.tipo),
+        estado: est(w.estado),
+        signo: str(w.signo),
+        texto: str(w.texto),
+        tiempo: str(w.tiempo),
+        skills: (Array.isArray(w.skills) ? w.skills : []).filter((k: any) => k && typeof k.nombre === 'string' && k.nombre).map((k: any) => ({ nombre: k.nombre, cargada: k.cargada === true, reciente: k.reciente === true })),
+      })),
+  }
+}
+
+// Hay algo moviéndose en el dibujo: sólo entonces hace falta redibujar en cada cuadro.
+export const orqLive = (st: OrqState | undefined) => !!st && (st.orquestador === 'working' || st.workers.some((w) => w.estado === 'working' || w.estado === 'blocked'))
+
+// Columna de cada worker: el centro de su franja.
+export const orqXs = (ancho: number, n: number) => Array.from({ length: n }, (_, i) => Math.floor(((i + 0.5) * ancho) / n))
+
+// Camino de la luz: tronco, rama hasta la columna del worker y su bajada. Pares [columna, fila].
+export const orqPath = (cx: number, x: number): [number, number][] => {
+  const paso = x >= cx ? 1 : -1
+  const rama: [number, number][] = []
+  for (let c = cx; c !== x + paso; c += paso) rama.push([c, 2])
+  return [[cx, 1], ...rama, [x, 3], [x, 4]]
+}
+
+// Las (hasta) 3 posiciones del camino que están prendidas en este cuadro; el ciclo deja 4 cuadros de pausa.
+export const orqPulse = (largo: number, cuadro: number) => {
+  const p = cuadro % (largo + 4)
+  return [p - 2, p - 1, p].filter((q) => q >= 0 && q < largo)
+}
+
+export const orqFit = (s: string, tope: number) => {
+  const ch = Array.from(s)
+  return ch.length > tope ? ch.slice(0, Math.max(1, tope - 1)).join('') + '…' : s
+}
+
+const ORQ_TONE: Record<string, OrqTone> = { working: 'work', done: 'ok', idle: 'ok', blocked: 'bad' }
+
+// El dibujo como grilla de celdas (misma geometría que `dibujar()` de orq) y dónde quedó el nombre de cada worker.
+export const orqDraw = (ancho: number, st: OrqState | undefined, cuadro: number) => {
+  const rows: OrqCell[][] = []
+  const hits: { nombre: string; y: number; x0: number; x1: number }[] = []
+  const put = (x: number, y: number, s: string, tone: OrqTone, bold = false) => {
+    while (rows.length <= y) rows.push(Array.from({ length: ancho }, () => ({ ch: ' ', tone: 'text' as OrqTone, bold: false })))
+    Array.from(s).forEach((ch, i) => {
+      if (x + i >= 0 && x + i < ancho) rows[y][x + i] = { ch, tone, bold }
+    })
+  }
+  const center = (cx: number, y: number, s: string, tone: OrqTone, bold = false, tope = ancho) => {
+    const fit = orqFit(s, tope)
+    const n = Array.from(fit).length
+    const x = Math.max(0, Math.min(ancho - n, cx - Math.floor(n / 2)))
+    put(x, y, fit, tone, bold)
+    return [x, x + n]
+  }
+  const cx = Math.floor(ancho / 2)
+  const pensando = st?.orquestador === 'working'
+  center(cx, 0, '◆ orquestador' + (pensando ? ' ' + ORQ_SPIN[cuadro % ORQ_SPIN.length] : ''), pensando ? 'orq' : 'text', true)
+  if (!st) {
+    center(cx, 1, 'sin datos', 'dim')
+    return { rows, hits }
+  }
+  const ws = st.workers.slice(0, ORQ_MAX)
+  if (!ws.length) {
+    center(cx, 2, 'sin workers', 'dim')
+    center(cx, 3, 'pedile algo al orquestador', 'dim')
+    return { rows, hits }
+  }
+  const n = ws.length
+  const xs = orqXs(ancho, n)
+  const izq = Math.min(xs[0], cx)
+  const der = Math.max(xs[n - 1], cx)
+  put(cx, 1, '┃', 'line')
+  for (let x = izq; x <= der; x++) put(x, 2, '━', 'line')
+  for (const x of xs) {
+    put(x, 2, x === izq && x !== cx ? '┏' : x === der && x !== cx ? '┓' : '┳', 'line')
+    put(x, 3, '┃', 'line')
+    put(x, 4, '▼', 'line')
+  }
+  put(cx, 2, n === 1 ? '┃' : xs.includes(cx) ? '╋' : '┻', 'line')
+  const tope = Math.max(4, Math.floor(ancho / n) - 1)
+  ws.forEach((w, i) => {
+    const x = xs[i]
+    if (w.estado === 'working') {
+      const camino = orqPath(cx, x)
+      for (const q of orqPulse(camino.length, cuadro)) {
+        const [c, f] = camino[q]
+        put(c, f, rows[f][c].ch, 'pulse', true)
+      }
+    }
+    const tone: OrqTone = w.estado === 'blocked' && cuadro % 6 < 3 ? 'dim' : ORQ_TONE[w.estado] || 'gray'
+    const [x0, x1] = center(x, 5, (w.signo ? w.signo + ' ' : '') + w.nombre, tone, true, tope)
+    hits.push({ nombre: w.nombre, y: 5, x0, x1 })
+    if (w.tipo) center(x, 6, w.tipo, 'dim', false, tope)
+    if (w.texto) center(x, 7, w.texto, tone, false, tope)
+    if (w.tiempo) center(x, 8, w.tiempo, 'dim', false, tope)
+    const sk = w.skills.length > ORQ_SKILLS ? w.skills.slice(0, ORQ_SKILLS - 1) : w.skills
+    sk.forEach((k, j) => center(x, 9 + j, '┄ ' + k.nombre, k.reciente ? 'hot' : k.cargada ? 'text' : 'dim', k.reciente, tope))
+    if (sk.length < w.skills.length) center(x, 9 + sk.length, `┄ +${w.skills.length - sk.length} más`, 'dim', false, tope)
+  })
+  return { rows, hits }
+}
+
+async function refreshOrq($: any) {
+  if (orqBusy) return
+  orqBusy = true
+  const r = await $.process.run(orqCmd.trim().split(/\s+/), { timeoutMs: 3000 }).catch(() => undefined)
+  orqBusy = false
+  orqState = r?.exitCode === 0 ? orqParse(r.stdout) : undefined
+}
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -1257,7 +1405,45 @@ function draw($: any, e: any) {
     return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
   }
   if (!g0nShownIn(tab)) g0nShown = -1
-  else if (Image && e.surface === 'terminal') {
+  else if (orqOn) {
+    g0nShown = -1
+    const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
+    const { rows, hits } = orqDraw(Math.max(1, cols - 2), orqState, frame)
+    // Corta la fila en tramos del mismo color; `to` deja afuera los espacios del final.
+    const runs = (row: OrqCell[], from: number, to: number) => {
+      const parts: any[] = []
+      for (let i = from; i < to; ) {
+        let j = i + 1
+        while (j < to && row[j].tone === row[i].tone && row[j].bold === row[i].bold) j++
+        parts.push(span(row.slice(i, j).map((c) => c.ch).join(''), tones[row[i].tone], { bold: row[i].bold }))
+        i = j
+      }
+      return parts
+    }
+    const end = (row: OrqCell[]) => {
+      let n = row.length
+      while (n > 0 && row[n - 1].ch === ' ') n--
+      return n
+    }
+    out.push(
+      Box({
+        key: 'orq-flow',
+        flexDirection: 'column',
+        children: rows.map((row, y) => {
+          const mine = hits.filter((h) => h.y === y)
+          if (!mine.length) return t(runs(row, 0, end(row)).concat(end(row) ? [] : [' ']))
+          const parts: any[] = []
+          let at = 0
+          for (const h of mine) {
+            if (h.x0 > at) parts.push(t(runs(row, at, h.x0)))
+            parts.push(Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: () => void $.process.run(['herdr', 'agent', 'focus', h.nombre], { timeoutMs: 5000 }).catch(() => undefined), children: runs(row, h.x0, h.x1) }))
+            at = h.x1
+          }
+          return Box({ key: 'orq-names', flexDirection: 'row', children: parts })
+        }),
+      }),
+    )
+  } else if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f
     const source = imgSource($, `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`)
@@ -4284,6 +4470,11 @@ export function register(on: any) {
     mdlCpam = /:8317\b/.test(String((await $.env.get('ANTHROPIC_BASE_URL').catch(() => '')) || ''))
     if (mdlCpam) void refreshModels($)
     ctxEnv = String((await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS').catch(() => '')) || '')
+    orqOn = (await $.env.get('ORQ_ROL').catch(() => '')) === 'orquestador'
+    if (orqOn) {
+      orqCmd = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '') || orqCmd
+      void refreshOrq($)
+    }
     if (home) {
       try {
         directEmail = String(JSON.parse((await $.fs.read(`${configDir || home}/.claude.json`).catch(() => '')) || '{}')?.oauthAccount?.emailAddress || '')

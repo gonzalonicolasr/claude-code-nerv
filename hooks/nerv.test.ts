@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqXs, orqPath, orqPulse, orqFit, orqDraw } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1738,4 +1738,154 @@ test('away: al volver sin 180 s no refresca PRs (prsAt reciente) pero sí lee co
   expect((await state($)).away).toBe(false)
   expect(awk.length).toBe(awkAt + 1)
   expect(gh.length).toBe(ghAt)
+})
+
+const ORQ_JSON = {
+  orquestador: 'working',
+  workers: [
+    { nombre: 'login', tipo: 'coding', estado: 'working', signo: '●', texto: 'trabaja', tiempo: '2 min', skills: [{ nombre: 'git-workflow', cargada: true, reciente: false }, { nombre: 'test-driven-fix', cargada: false, reciente: true }] },
+    { nombre: 'carrito', tipo: 'review', estado: 'done', signo: '✓', texto: 'terminó', tiempo: 'en 1 min', skills: [] },
+  ],
+}
+const orqText = (ancho: number, st: any, cuadro = 0) => orqDraw(ancho, st, cuadro).rows.map((r) => r.map((c) => c.ch).join('').trimEnd())
+
+test('orqParse lee el contrato, corta en 3 workers y descarta lo que no entiende', () => {
+  const st = orqParse(JSON.stringify(ORQ_JSON))!
+  expect(st.orquestador).toBe('working')
+  expect(st.workers.map((w) => w.nombre)).toEqual(['login', 'carrito'])
+  expect(st.workers[0].skills[1]).toEqual({ nombre: 'test-driven-fix', cargada: false, reciente: true })
+  expect(orqParse('no es json')).toBeUndefined()
+  expect(orqParse('{"orquestador":"idle"}')).toBeUndefined()
+  expect(orqParse('[]')).toBeUndefined()
+  const raro = orqParse(JSON.stringify({ orquestador: 'volando', workers: [{ nombre: 'a', estado: 7 }, { tipo: 'sin nombre' }, { nombre: 'b' }, { nombre: 'c' }, { nombre: 'd' }] }))!
+  expect(raro.orquestador).toBe('unknown')
+  expect(raro.workers.map((w) => w.nombre)).toEqual(['a', 'b', 'c'])
+  expect(raro.workers[0]).toEqual({ nombre: 'a', tipo: '', estado: 'unknown', signo: '', texto: '', tiempo: '', skills: [] })
+})
+
+test('orqLive sólo es verdad con algo trabajando o bloqueado', () => {
+  expect(orqLive(undefined)).toBe(false)
+  expect(orqLive({ orquestador: 'idle', workers: [] })).toBe(false)
+  expect(orqLive({ orquestador: 'working', workers: [] })).toBe(true)
+  const w = (estado: any) => ({ orquestador: 'idle' as const, workers: [{ nombre: 'a', tipo: '', estado, signo: '', texto: '', tiempo: '', skills: [] }] })
+  expect(orqLive(w('done'))).toBe(false)
+  expect(orqLive(w('working'))).toBe(true)
+  expect(orqLive(w('blocked'))).toBe(true)
+})
+
+test('la geometría del flujo: columnas, camino de la luz, pulso de 3 celdas y truncado', () => {
+  expect(orqXs(40, 1)).toEqual([20])
+  expect(orqXs(40, 2)).toEqual([10, 30])
+  expect(orqXs(42, 3)).toEqual([7, 21, 35])
+  expect(orqPath(20, 20)).toEqual([[20, 1], [20, 2], [20, 3], [20, 4]])
+  expect(orqPath(20, 18)).toEqual([[20, 1], [20, 2], [19, 2], [18, 2], [18, 3], [18, 4]])
+  expect(orqPath(20, 22).slice(1, 4)).toEqual([[20, 2], [21, 2], [22, 2]])
+  expect(orqPulse(6, 0)).toEqual([0])
+  expect(orqPulse(6, 3)).toEqual([1, 2, 3])
+  expect(orqPulse(6, 7)).toEqual([5])
+  expect(orqPulse(6, 8)).toEqual([])
+  expect(orqPulse(6, 10)).toEqual([0])
+  expect(orqFit('login', 8)).toBe('login')
+  expect(orqFit('● un-nombre-largo', 8)).toBe('● un-no…')
+})
+
+test('orqDraw dibuja el árbol con una bajada por worker y sus datos centrados en cada columna', () => {
+  const st = orqParse(JSON.stringify(ORQ_JSON))!
+  const { rows, hits } = orqDraw(40, st, 0)
+  const txt = orqText(40, st)
+  expect(txt[0].trim()).toBe('◆ orquestador ⠋')
+  expect(txt[1]).toBe(' '.repeat(20) + '┃')
+  expect(txt[2]).toBe(' '.repeat(10) + '┏' + '━'.repeat(9) + '┻' + '━'.repeat(9) + '┓')
+  expect(txt[3]).toBe(' '.repeat(10) + '┃' + ' '.repeat(19) + '┃')
+  expect(txt[4]).toBe(' '.repeat(10) + '▼' + ' '.repeat(19) + '▼')
+  expect(txt[5]).toContain('● login')
+  expect(txt[5]).toContain('✓ carrito')
+  expect(txt[6]).toContain('coding')
+  expect(txt[7]).toContain('terminó')
+  expect(txt[8]).toContain('en 1 min')
+  expect(txt[9].trim()).toBe('┄ git-workflow')
+  expect(txt[10].trim()).toBe('┄ test-driven-fix')
+  expect(hits.map((h) => h.nombre)).toEqual(['login', 'carrito'])
+  expect(rows[5].slice(hits[0].x0, hits[0].x1).map((c) => c.ch).join('')).toBe('● login')
+  expect(rows[5][hits[0].x0]).toEqual({ ch: '●', tone: 'work', bold: true })
+  expect(rows[5][hits[1].x0].tone).toBe('ok')
+  expect(rows[9].find((c) => c.ch === '┄')).toEqual({ ch: '┄', tone: 'text', bold: false })
+  expect(rows[10].find((c) => c.ch === '┄')).toEqual({ ch: '┄', tone: 'hot', bold: true })
+  expect(orqText(40, { ...st, workers: st.workers.slice(0, 1) })[2]).toBe(' '.repeat(20) + '┃')
+  const tres = orqText(42, { ...st, workers: [...st.workers, { ...st.workers[1], nombre: 'pagos-con-nombre-largo' }] })
+  expect(tres[2]).toBe(' '.repeat(7) + '┏' + '━'.repeat(13) + '╋' + '━'.repeat(13) + '┓')
+  expect(tres[5]).toContain('✓ pagos-con-…')
+})
+
+test('orqDraw: la luz baja por el camino del worker que trabaja y el bloqueado parpadea', () => {
+  const st = orqParse(JSON.stringify(ORQ_JSON))!
+  const lit = (cuadro: number) => orqDraw(40, st, cuadro).rows.flatMap((r, y) => r.flatMap((c, x) => (c.tone === 'pulse' ? [[x, y]] : [])))
+  expect(lit(0)).toEqual([[20, 1]])
+  expect(lit(2)).toEqual([[20, 1], [19, 2], [20, 2]])
+  expect(lit(13)).toEqual([[10, 2], [10, 3], [10, 4]])
+  expect(lit(17)).toEqual([])
+  expect(lit(5).every(([x]) => x <= 20)).toBe(true)
+  const bloq = { ...st, workers: [{ ...st.workers[1], estado: 'blocked' as const }] }
+  const tone = (cuadro: number) => orqDraw(40, bloq, cuadro).rows[5].find((c) => c.ch !== ' ')!.tone
+  expect(tone(0)).toBe('dim')
+  expect(tone(3)).toBe('bad')
+})
+
+test('orqDraw sin datos, sin workers y con muchas skills', () => {
+  expect(orqText(40, undefined).map((r) => r.trim())).toEqual(['◆ orquestador', 'sin datos'])
+  expect(orqText(40, { orquestador: 'idle', workers: [] }).map((r) => r.trim())).toEqual(['◆ orquestador', '', 'sin workers', 'pedile algo al orquestador'])
+  const sk = 'abcdef'.split('').map((nombre) => ({ nombre, cargada: false, reciente: false }))
+  const txt = orqText(40, { orquestador: 'idle', workers: [{ nombre: 'a', tipo: '', estado: 'idle', signo: '', texto: '', tiempo: '', skills: sk }] })
+  expect(txt.slice(9).map((r) => r.trim())).toEqual(['┄ a', '┄ b', '┄ c', '┄ +3 más'])
+})
+
+const orqSession = async ($: any, on: any, env: Record<string, string>, stdout: () => string) => {
+  mock.env(on, { HOME: '/h', ...env })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const asked: string[][] = []
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('process.run', async (_$: any, e: any) => {
+    asked.push(e.argv)
+    return e.argv[0] === '/x/estado' || e.argv[0] === 'orq' ? { value: { exitCode: 0, stdout: stdout(), stderr: '' } } : { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  return { m, clock, asked }
+}
+
+test('con ORQ_ROL=orquestador el flujo va arriba del panel, se refresca solo y el nombre salta al worker', async ($, on) => {
+  let out = JSON.stringify(ORQ_JSON)
+  const { m, clock, asked } = await orqSession($, on, { ORQ_ROL: 'orquestador', ORQ_ESTADO_CMD: '/x/estado --json' }, () => out)
+  expect(asked.some((a) => a.join(' ') === '/x/estado --json')).toBe(true)
+  let text = JSON.stringify(await m.drawn())
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  expect(await m.find({ key: 'g0n' })).toBeUndefined()
+  expect(text).toContain('◆ orquestador')
+  expect(text).toContain('login')
+  expect(text).toContain('git-workflow')
+  expect(text.indexOf('orquestador')).toBeLessThan(text.indexOf('MAGI'))
+  await m.press({ key: 'orq-w-carrito' })
+  expect(asked.some((a) => a.join(' ') === 'herdr agent focus carrito')).toBe(true)
+  await m.press({ key: 'tab-git' })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  await m.press({ key: 'tab-live' })
+  expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
+  await m.press({ key: 'tab-magi' })
+  out = 'roto'
+  const antes = asked.filter((a) => a[0] === '/x/estado').length
+  await clock.advance(1000)
+  expect(asked.filter((a) => a[0] === '/x/estado').length).toBe(antes + 1)
+  text = JSON.stringify(await m.drawn())
+  expect(text).toContain('sin datos')
+  expect(text).not.toContain('login')
+})
+
+test('sin ORQ_ROL no hay flujo ni se corre el comando de estado', async ($, on) => {
+  const { m, clock, asked } = await orqSession($, on, {}, () => JSON.stringify(ORQ_JSON))
+  await clock.advance(3000)
+  expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
+  expect(JSON.stringify(await m.drawn())).not.toContain('◆ orquestador')
+  expect(asked.some((a) => a[0] === 'orq' || a[0] === '/x/estado')).toBe(false)
 })
