@@ -1408,7 +1408,15 @@ function draw($: any, e: any) {
     Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id === 'orq') })] })
   const flaps = orqOn ? [Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView)] }), t([span('─'.repeat(Math.max(0, cols)), C.dim)])] : []
   if (orqView) {
+    // El cartel de ORQ usa el reloj y el contador de cuadros del g0n: sólo hay uno de los dos a la vista.
+    const banner: any[] = []
     g0nShown = -1
+    if (Image && e.surface === 'terminal') {
+      const f = g0nFrame()
+      g0nShown = f
+      const source = imgSource($, `${$.plugin.root}/assets/orq/${themeId}/${String(f).padStart(2, '0')}.png`)
+      if (source) banner.push(Box({ key: 'orq-banner', children: [Image({ key: 'orq-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
+    }
     const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
     const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqState, frame)
     // Corta la fila en tramos del mismo color, sin los espacios del final.
@@ -1433,7 +1441,7 @@ function draw($: any, e: any) {
       const press = () => void $.process.run(['herdr', 'agent', 'focus', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
       return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) })] })
     })
-    return Box({ flexDirection: 'column', children: [...flaps, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
+    return Box({ flexDirection: 'column', children: [...flaps, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
   }
   const out: any[] = [...flaps]
   const alert = battery()
