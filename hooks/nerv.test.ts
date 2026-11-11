@@ -1942,8 +1942,26 @@ test('en una superficie sin imagen la solapa ORQ muestra el flujo sin cartel', a
   expect(text).toContain('login')
 })
 
-test('sin ORQ_ROL no hay solapas ni flujo ni se corre el comando de estado, y /nerv orq no hace nada', async ($, on) => {
+test('en cualquier sesión, si orq contesta aparecen las solapas: arranca en NERV y el estado se pide sólo al entrar a ORQ', async ($, on) => {
   const { m, clock, asked } = await orqSession($, on, {}, () => JSON.stringify(ORQ_JSON))
+  const estados = () => asked.filter((a) => a.join(' ') === 'orq estado --json').length
+  await clock.advance(3000)
+  expect(estados()).toBe(1)
+  expect(await m.find({ key: 'flap-orq' })).toBeDefined()
+  expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
+  let text = JSON.stringify(await m.drawn())
+  expect(text).toContain('◆ NERV')
+  expect(text).toContain('メルキオール')
+  await $.command.run({ command: 'nerv', args: 'orq' })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  expect(estados()).toBe(2)
+  text = JSON.stringify(await m.drawn())
+  expect(text).toContain('◆ orquestador')
+  expect(text).toContain('login')
+})
+
+const orqApagado = async ($: any, on: any, env: Record<string, string>, out: string) => {
+  const { m, clock, asked } = await orqSession($, on, env, () => out)
   await clock.advance(3000)
   await $.command.run({ command: 'nerv', args: 'orq' })
   for (const k of ['flaps', 'flap-orq', 'orq-flow']) expect(await m.find({ key: k })).toBeUndefined()
@@ -1951,7 +1969,16 @@ test('sin ORQ_ROL no hay solapas ni flujo ni se corre el comando de estado, y /n
   expect(text).not.toContain('◆ orquestador')
   expect(text).not.toContain('assets/orq')
   expect(text).toContain('メルキオール')
-  expect(asked.some((a) => a[0] === 'orq' || a[0] === '/x/estado')).toBe(false)
+  return asked
+}
+
+test('sin orq que conteste no hay solapas ni flujo y /nerv orq no hace nada', async ($, on) => {
+  await orqApagado($, on, {}, 'no hay orq')
+})
+
+test('con NERV_ORQ=0 no hay solapas ni se le pregunta a orq', async ($, on) => {
+  const asked = await orqApagado($, on, { NERV_ORQ: '0' }, JSON.stringify(ORQ_JSON))
+  expect(asked.some((a: string[]) => a[0] === 'orq')).toBe(false)
 })
 
 // YOUTUBE con un reproductor simulado: la cola sale de lo que contesta mpv por el socket.

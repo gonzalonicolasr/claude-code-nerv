@@ -1097,7 +1097,7 @@ export const g0nShownIn = (tabId: string) => tabId !== 'live'
 // El medidor de EFFORT de abajo también se oculta en EN VIVO: esas filas van a las cámaras.
 export const effortShownIn = (tabId: string) => tabId !== 'live'
 
-// Flujo del orquestador: sólo en la sesión con ORQ_ROL=orquestador. Arriba del panel hay dos solapas,
+// Flujo del orquestador: en la sesión con ORQ_ROL=orquestador y en cualquiera donde `orq` conteste. Arriba del panel hay dos solapas,
 // NERV (la barra de siempre) y ORQ (el panel entero para el flujo). Con ORQ a la vista el estado sale
 // de `orq estado --json` (o de ORQ_ESTADO_CMD) una vez por segundo. Click en un worker: `orq enfocar`,
 // que lo pone al frente en la TUI de herdr o en la app Herdr, según dónde se lanzó.
@@ -1317,6 +1317,14 @@ async function refreshOrq($: any) {
   if (raw === orqRaw) return
   orqRaw = raw
   orqState = orqParse(raw)
+  $.ui.invalidate('ui.render')
+}
+
+// Fuera del orquestador: una sola consulta al arrancar para saber si hay `orq`; si contesta, aparecen las solapas.
+async function probeOrq($: any) {
+  const r = await $.process.run(orqCmd.trim().split(/\s+/), { timeoutMs: 3000 }).catch(() => undefined)
+  if (r?.exitCode !== 0 || !orqParse(String(r.stdout))) return
+  orqOn = true
   $.ui.invalidate('ui.render')
 }
 
@@ -4595,12 +4603,14 @@ export function register(on: any) {
     mdlCpam = /:8317\b/.test(String((await $.env.get('ANTHROPIC_BASE_URL').catch(() => '')) || ''))
     if (mdlCpam) void refreshModels($)
     ctxEnv = String((await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS').catch(() => '')) || '')
-    orqOn = (await $.env.get('ORQ_ROL').catch(() => '')) === 'orquestador'
-    orqView = orqOn
-    if (orqOn) {
-      orqCmd = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '') || orqCmd
-      void refreshOrq($)
-    }
+    // En la sesión del orquestador arranca en ORQ. En cualquier otra, la solapa aparece si `orq` contesta
+    // (arranca en NERV y no se pide estado hasta entrar). NERV_ORQ=0 la apaga en esa sesión.
+    const orqRol = (await $.env.get('ORQ_ROL').catch(() => '')) === 'orquestador'
+    orqCmd = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '') || orqCmd
+    orqOn = orqRol
+    orqView = orqRol
+    if (orqRol) void refreshOrq($)
+    else if ((await $.env.get('NERV_ORQ').catch(() => '')) !== '0') void probeOrq($)
     if (home) {
       try {
         directEmail = String(JSON.parse((await $.fs.read(`${configDir || home}/.claude.json`).catch(() => '')) || '{}')?.oauthAccount?.emailAddress || '')
