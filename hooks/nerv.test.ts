@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqDraw } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqDraw, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1931,4 +1931,133 @@ test('sin ORQ_ROL no hay solapas ni flujo ni se corre el comando de estado, y /n
   expect(text).not.toContain('assets/orq')
   expect(text).toContain('メルキオール')
   expect(asked.some((a) => a[0] === 'orq' || a[0] === '/x/estado')).toBe(false)
+})
+
+// YOUTUBE con un reproductor simulado: la cola sale de lo que contesta mpv por el socket.
+const YT_TITLES = ['Small Town Kid - When the Feeling Is Gone (Lyric Video)', 'Bronski Beat - Smalltown Boy (Official Video) 🎵🎵', '久石譲 - 人生のメリーゴーランド ハウルの動く城 サウンドトラック', 'corto']
+const ytSession = async ($: any, on: any, props: any, pause = false) => {
+  mock.env(on, { HOME: '/h', XDG_RUNTIME_DIR: '/r' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const ran: string[][] = []
+  const sent: any[][] = []
+  const items = Object.fromEntries(YT_TITLES.map((title, i) => ['idid' + i + 'xx', { id: 'idid' + i + 'xx', title, ch: 'Canal', d: i === 0 ? 3723 : 158 }]))
+  const answers: Record<string, any> = { 'time-pos': 14, duration: 156, pause, 'playlist-pos': 0, 'ao-volume': 35, 'media-title': YT_TITLES[0], playlist: YT_TITLES.map((_, i) => ({ filename: 'https://youtu.be/idid' + i + 'xx' })) }
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('fs.stat', async (_$: any, e: any) => {
+    if (e.path === '/r/nerv-yt.sock' || e.path === '/r/nerv-yt.json') return { value: { kind: 'file', size: 10, mtimeMs: 1, isLink: false } }
+    throw new Error('ENOENT')
+  })
+  on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/r/nerv-yt.json' ? JSON.stringify({ items }) : '' }))
+  on('process.run', async (_$: any, e: any) => {
+    const argv: string[] = e.argv
+    ran.push(argv)
+    if (argv[0] === 'socat') {
+      const cmds = String(e.init?.stdin || '').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      if (!cmds.length) return { value: { exitCode: 1, stdout: '', stderr: '' } }
+      for (const c of cmds) sent.push(c.command)
+      return { value: { exitCode: 0, stderr: '', stdout: cmds.map((c: any) => JSON.stringify({ request_id: c.request_id, error: 'success', data: c.command[0] === 'get_property' ? answers[c.command[1]] : null })).join('\n') } }
+    }
+    if (argv[0] === 'yt-dlp' && argv.includes('--flat-playlist'))
+      return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ entries: YT_TITLES.map((title, i) => ({ id: 'res' + i + 'xxxx', title, duration: i === 0 ? 3723 : 158 })) }) } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'yt algo' })
+  await clock.advance(1500)
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
+  return { m, clock, ran, sent }
+}
+// Ancho mínimo que necesita un elemento del dibujo si nada se parte en dos renglones.
+const ytText = (el: any): string => (typeof el === 'string' ? el : !el || typeof el !== 'object' ? '' : (el.props?.label ?? '') + [el.children ?? []].flat().map(ytText).join(''))
+const ytWidth = (el: any): number => {
+  if (!el || typeof el !== 'object') return typeof el === 'string' ? ytCells(el) : 0
+  const p = el.props || {}
+  const kids = [el.children ?? []].flat()
+  // ▶ ★ y los íconos de la interfaz son de una celda; ytCells los cuenta de más porque está pensado para títulos.
+  if (el.type !== 'Box') return ytCells(ytText(el).replace(/^ ▶ /, ' > '))
+  const pad = 2 * (p.paddingX ?? 0) + (p.paddingLeft ?? 0) + (p.paddingRight ?? 0) + (p.marginLeft ?? 0) + (p.borderStyle ? 2 : 0)
+  if (typeof p.width === 'number') return p.width + (p.marginLeft ?? 0)
+  const ws = kids.map(ytWidth)
+  return pad + (p.flexDirection === 'row' ? ws.reduce((a, b) => a + b, 0) + (p.columnGap ?? 0) * Math.max(0, ws.length - 1) : Math.max(0, ...ws))
+}
+const ytFind = (el: any, pred: (k: string) => boolean, out: any[] = []): any[] => {
+  if (!el || typeof el !== 'object') return out
+  if (Array.isArray(el)) return el.forEach((x) => ytFind(x, pred, out)), out
+  const key = String(el.key ?? el.props?.key ?? '')
+  if (key && pred(key)) out.push(el)
+  ytFind(el.children, pred, out)
+  return out
+}
+const ytRows = (tree: any) => ytFind(tree, (k) => /^(yq-\d+|yt-r-res\dxxxx|yt-next-row|yt-transport|yt-vol)$/.test(k))
+
+test('ytClip corta por celdas: kanji y emojis valen 2', () => {
+  expect(ytCells('abc')).toBe(3)
+  expect(ytCells('久石譲')).toBe(6)
+  expect(ytCells('a🎵b')).toBe(4)
+  expect(ytCells('❤️')).toBe(2)
+  expect(ytClip('corto', 10)).toBe('corto')
+  expect(ytClip('Bronski Beat - Smalltown Boy', 12)).toBe('Bronski Bea…')
+  expect(ytClip('久石譲 - 人生のメリーゴーランド', 12)).toBe('久石譲 - 人…')
+  expect(ytCells(ytClip('久石譲 - 人生のメリーゴーランド', 12))).toBeLessThanOrEqual(12)
+  expect(ytCells(ytClip('🎵🎵🎵🎵🎵🎵🎵', 6))).toBeLessThanOrEqual(6)
+})
+
+for (const [name, props, inner] of [
+  ['44 columnas', PANE_PROPS, 39],
+  ['angosto', { ...PANE_PROPS, bodyColumns: 34, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } }, 30],
+] as [string, any, number][])
+  test(`YOUTUBE a ${name}: ninguna fila se pasa del ancho y cada ✕ va en la fila de su tema`, async ($, on) => {
+    const { m } = await ytSession($, on, props)
+    const tree = await m.drawn()
+    const rows = ytRows(tree)
+    const keys = rows.map((r: any) => String(r.key ?? r.props?.key))
+    for (const k of ['yq-0', 'yq-1', 'yq-2', 'yq-3', 'yt-next-row', 'yt-transport', 'yt-vol', 'yt-r-res0xxxx', 'yt-r-res2xxxx']) expect(keys).toContain(k)
+    for (const r of rows) expect([String(r.key ?? r.props?.key), ytWidth(r) <= inner]).toEqual([String(r.key ?? r.props?.key), true])
+    for (const k of [1, 2, 3]) {
+      const row = rows.find((r: any) => String(r.key ?? r.props?.key) === 'yq-' + k)
+      expect(ytFind(row, (x) => x === 'yq-go-' + k)).toHaveLength(1)
+      expect(ytFind(row, (x) => x === 'yq-rm-' + k)).toHaveLength(1)
+    }
+    const text = JSON.stringify(tree)
+    for (const emoji of ['⏮', '⏸', '⏭', '♥']) expect(text).not.toContain(emoji)
+    expect(text).toContain(inner >= 38 ? '✕ limpiar cola' : '✕ limpiar"')
+    expect(ytText(ytFind(tree, (x) => x === 'yq-go-0')[0]).slice(0, 3)).toBe(' ▶ ')
+    expect(ytText(ytFind(tree, (x) => x === 'yq-go-1')[0]).slice(0, 3)).toBe(' 2 ')
+    const chips = ytFind(tree, (x) => x === 'yt-chips')[0]
+    expect(chips.props.columnGap).toBe(1)
+    expect(chips.props.flexWrap).toBe('wrap')
+  })
+
+test('YOUTUBE: cada botón de la tarjeta manda a mpv lo que dice', async ($, on) => {
+  const { m, sent } = await ytSession($, on, PANE_PROPS)
+  await m.drawn()
+  const last = async (key: string) => {
+    sent.length = 0
+    await m.press({ key })
+    return sent.find((c) => c[0] !== 'get_property')
+  }
+  expect(await last('yt-prev')).toEqual(['playlist-prev'])
+  expect(await last('yt-pause')).toEqual(['cycle', 'pause'])
+  expect(await last('yt-next')).toEqual(['playlist-next'])
+  expect(await last('yt-voldown')).toEqual(['add', 'ao-volume', -5])
+  expect(await last('yt-volup')).toEqual(['add', 'ao-volume', 5])
+  expect(await last('yq-go-2')).toEqual(['playlist-play-index', 2])
+  expect(await last('yq-rm-1')).toEqual(['playlist-remove', 1])
+  expect(await last('yt-stop')).toEqual(['quit'])
+})
+
+test('YOUTUBE: limpiar cola también corta la carga del resto de los temas', async ($, on) => {
+  const { m, ran, sent } = await ytSession($, on, PANE_PROPS)
+  await m.drawn()
+  ran.length = 0
+  await m.press({ key: 'yt-clear' })
+  const stop = ran.findIndex((a) => a[0] === 'bash' && a.includes('nerv-yt-stop-fill'))
+  const clear = ran.findIndex((a) => a[0] === 'socat')
+  expect(stop).toBeGreaterThanOrEqual(0)
+  expect(stop).toBeLessThan(clear)
+  expect(ran[stop][2]).toContain('nerv-yt-fill')
+  expect(ran[stop][2]).not.toContain('input-ipc-server')
+  expect(sent).toContainEqual(['playlist-clear'])
 })
