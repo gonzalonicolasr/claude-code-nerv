@@ -1873,7 +1873,7 @@ test('la sesión del orquestador arranca en la solapa ORQ: sólo solapas y flujo
   expect(text).not.toContain('メルキオール')
   expect(text).not.toContain('EFFORT')
   await m.press({ key: 'orq-w-carrito' })
-  expect(asked.some((a) => a.join(' ') === 'herdr agent focus carrito')).toBe(true)
+  expect(asked.some((a) => a.join(' ') === 'orq enfocar carrito')).toBe(true)
   out = 'roto'
   await clock.advance(1000)
   expect(estados()).toBe(2)

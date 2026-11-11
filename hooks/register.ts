@@ -1074,7 +1074,8 @@ export const effortShownIn = (tabId: string) => tabId !== 'live'
 
 // Flujo del orquestador: sólo en la sesión con ORQ_ROL=orquestador. Arriba del panel hay dos solapas,
 // NERV (la barra de siempre) y ORQ (el panel entero para el flujo). Con ORQ a la vista el estado sale
-// de `orq estado --json` (o de ORQ_ESTADO_CMD) una vez por segundo.
+// de `orq estado --json` (o de ORQ_ESTADO_CMD) una vez por segundo. Click en un worker: `orq enfocar`,
+// que lo pone al frente en la TUI de herdr o en la app Herdr, según dónde se lanzó.
 export type OrqEstado = 'working' | 'idle' | 'done' | 'blocked' | 'unknown' | 'cerrado'
 export type OrqSkill = { nombre: string; cargada: boolean; reciente: boolean }
 export type OrqWorker = { nombre: string; tipo: string; estado: OrqEstado; signo: string; texto: string; tiempo: string; skills: OrqSkill[] }
@@ -1438,7 +1439,7 @@ function draw($: any, e: any) {
     const flow = rows.map((row, y) => {
       const h = hits.find((x) => x.y === y)
       if (!h) return t(end(row) ? runs(row, 0, end(row)) : [' '])
-      const press = () => void $.process.run(['herdr', 'agent', 'focus', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
+      const press = () => void $.process.run(['orq', 'enfocar', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
       return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) })] })
     })
     return Box({ flexDirection: 'column', children: [...flaps, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
