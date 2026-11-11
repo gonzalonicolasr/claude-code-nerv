@@ -221,6 +221,31 @@ let ytItems: Record<string, YtItem> = {}
 let ytFilesSize = -1
 let ytLegacy: YtItem[] = []
 let ytNote = ''
+// Íconos de Nerd Font (una celda en JetBrainsMono Nerd Font). Los emojis ⏮ ⏸ ⏭ no están en la fuente
+// y la terminal los dibuja como bloques de color.
+const YT_ICON = { prev: '\uf048', pause: '\uf04c', next: '\uf051', heart: '\uf004' }
+// Corta la carga del resto de la cola (el bash `nerv-yt-fill`) sin tocar el reproductor.
+const YT_STOP_FILL = 'for p in $(pgrep -x bash); do tr "\\0" "\\n" </proc/$p/cmdline 2>/dev/null | grep -qx nerv-yt-fill && [ "$p" != $$ ] && kill "$p"; done; true'
+// Ancho en celdas de un título: además de kanji, los emojis ocupan 2 y los modificadores 0.
+export const ytCells = (s: string) => {
+  let w = 0
+  for (const ch of s) w += /[\u200d\ufe0e\ufe0f\u0300-\u036f]/.test(ch) ? 0 : /\p{Extended_Pictographic}/u.test(ch) ? 2 : cellWidth(ch)
+  return w
+}
+// Como `clip`, pero midiendo celdas: un título que mide de más parte el botón en dos renglones.
+export const ytClip = (s: string, n: number) => {
+  s = String(s ?? '')
+  if (ytCells(s) <= n) return s
+  let out = ''
+  let w = 0
+  for (const ch of s) {
+    const cw = ytCells(ch)
+    if (w + cw > n - 1) break
+    out += ch
+    w += cw
+  }
+  return out + '…'
+}
 const clockOf = (sec: number) => mmss((sec || 0) * 1000)
 let cortexKey = ''
 let cortexBusy = false
@@ -1605,11 +1630,15 @@ function draw($: any, e: any) {
     const n = yt.now
     const cur = n ? yt.queue[n.idx] : undefined
     const wrap2 = (txt: string, n2: number) => {
-      if (txt.length <= n2) return [txt]
-      let cut = txt.lastIndexOf(' ', n2)
-      if (cut < n2 * 0.5) cut = n2
-      return [txt.slice(0, cut).trimEnd(), clip(txt.slice(cut).trim(), n2)]
+      if (ytCells(txt) <= n2) return [txt]
+      const head = ytClip(txt, n2 + 1).slice(0, -1)
+      let cut = head.lastIndexOf(' ')
+      if (cut < head.length * 0.5) cut = head.length
+      return [txt.slice(0, cut).trimEnd(), ytClip(txt.slice(cut).trim(), n2)]
     }
+    // Fila de un texto y, a la derecha, algo que no se achica ni se parte: lo que cede es el texto.
+    const ytRow = (key: string, left: any, right: any[]) =>
+      Box({ key, flexDirection: 'row', justifyContent: 'space-between', children: [Box({ key: key + '-l', flexShrink: 1, overflow: 'hidden', children: [left] }), Box({ key: key + '-r', flexDirection: 'row', flexShrink: 0, marginLeft: 1, children: right })] })
     const nowRows: any[] = []
     if (n) {
       if (cur?.id) void ytThumbFor($, cur.id)
@@ -1617,7 +1646,7 @@ function draw($: any, e: any) {
       const thumb = !!thumbSrc
       const tw = thumb ? w - 17 : w - 2
       const info: any[] = wrap2(cur?.title || n.title || 'cargando…', tw).map((line) => t([span(line, C.text, { bold: true })]))
-      if (cur?.ch) info.push(t([span(clip(cur.ch, tw), C.muted)]))
+      if (cur?.ch) info.push(t([span(ytClip(cur.ch, tw), C.muted)]))
       nowRows.push(
         thumb
           ? Box({
@@ -1648,9 +1677,9 @@ function draw($: any, e: any) {
               key: 'yt-transport',
               flexDirection: 'row',
               children: [
-                chip('yt-prev', '⏮', true, C.tabBg, () => void ytCtl($, ['playlist-prev'])),
-                chip('yt-pause', n.pause ? '▶' : '⏸', true, n.pause ? C.amber : C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
-                chip('yt-next', '⏭', true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
+                chip('yt-prev', YT_ICON.prev, true, C.tabBg, () => void ytCtl($, ['playlist-prev'])),
+                chip('yt-pause', n.pause ? '▶' : YT_ICON.pause, true, n.pause ? C.amber : C.tabBg, () => void ytCtl($, ['cycle', 'pause'])),
+                chip('yt-next', YT_ICON.next, true, C.tabBg, () => void ytCtl($, ['playlist-next'])),
                 chip('yt-stop', '■', true, C.tabBg, () => void ytCtl($, ['quit'])),
               ],
             }),
@@ -1661,7 +1690,7 @@ function draw($: any, e: any) {
                 chip('yt-voldown', '−', true, C.tabBg, () => void ytCtl($, ['add', 'ao-volume', -5])),
                 Box({
                   key: 'yt-vol-box',
-                  width: 8,
+                  width: 6,
                   paddingLeft: 1,
                   children: [
                     Input({
@@ -1691,7 +1720,10 @@ function draw($: any, e: any) {
         }),
       )
       if (ytNote) nowRows.push(t([span('◌ ' + ytNote, C.amber)]))
-      else if (n.idx + 1 < yt.queue.length) nowRows.push(kvBtn([span('↳ ', C.dim), span(clip(yt.queue[n.idx + 1].title, w - 16), C.dim)], chip('yt-clear', narrow ? '✕ limpiar' : '✕ limpiar cola', false, C.tabBg, () => void ytCtl($, ['playlist-clear']))))
+      else if (n.idx + 1 < yt.queue.length) {
+        const label = w < 38 ? '✕ limpiar' : '✕ limpiar cola'
+        nowRows.push(ytRow('yt-next-row', t([span('↳ ', C.dim), span(ytClip(yt.queue[n.idx + 1].title, w - label.length - 5), C.dim)]), [chip('yt-clear', label, false, C.tabBg, () => void ytClear($))]))
+      }
     } else nowRows.push(t([span('nada sonando · buscá algo abajo', C.muted)]))
     out.push(card('yt-now', n ? (n.pause ? '♪ EN PAUSA' : '♪ SONANDO') : '♪ YOUTUBE', n ? (n.pause ? C.amber : C.lime) : C.purple, nowRows))
     if (n && yt.queue.length > 1)
@@ -1702,15 +1734,14 @@ function draw($: any, e: any) {
           n.pause ? C.amber : C.lime,
           yt.queue.map((q, k) => {
             const on = k === n.idx
-            return Box({
-              key: 'yq-' + k,
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              children: [
-                Button({ key: 'yq-go-' + k, label: `${on ? '▶' : String(k + 1).padStart(2)} ${clip(q.title, Math.max(8, w - 12))}`, plain: true, dimColor: k < n.idx, onPress: () => void ytCtl($, ['playlist-play-index', k]) }),
-                on ? t([span(q.d ? clockOf(q.d) : '', C.lime)]) : chip('yq-rm-' + k, '✕', false, C.tabBg, () => void ytCtl($, ['playlist-remove', k])),
-              ],
-            })
+            const dur = on && q.d ? clockOf(q.d) : ''
+            // 3 del número, 1 de separación y lo de la derecha: la duración o el chip de la ✕ (3).
+            const room = w - 4 - (on ? dur.length : 3)
+            return ytRow(
+              'yq-' + k,
+              Button({ key: 'yq-go-' + k, label: `${(on ? '▶' : String(k + 1)).padStart(2)} ${ytClip(q.title, Math.max(8, room))}`, plain: true, dimColor: k < n.idx, onPress: () => void ytCtl($, ['playlist-play-index', k]) }),
+              [on ? t([span(dur, C.lime)]) : chip('yq-rm-' + k, '✕', false, C.tabBg, () => void ytCtl($, ['playlist-remove', k]))],
+            )
           }),
           8,
         ),
@@ -1771,10 +1802,11 @@ function draw($: any, e: any) {
           key: 'yt-chips',
           flexDirection: 'row',
           flexWrap: 'wrap',
+          columnGap: 1,
           children: [
-            chip('yt-fav', '♥ me gusta', yt.query === 'me gusta', C.tabBg, () => void ytLoad($, ':ytfav', 'me gusta')),
+            chip('yt-fav', YT_ICON.heart + ' me gusta', yt.query === 'me gusta', C.tabBg, () => void ytLoad($, ':ytfav', 'me gusta')),
             chip('yt-rec', '★ para vos', yt.query === 'para vos', C.tabBg, () => void ytLoad($, ':ytrec', 'para vos')),
-            ...recentChips.map((q, i) => chip('yt-rq-' + i, clip(q, 14), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
+            ...recentChips.map((q, i) => chip('yt-rq-' + i, ytClip(q, 14), false, C.tabBg, () => ((ytDraft = q), void ytSearch($, q)))),
             chip('yt-tui', '⧉ abrir yt', false, C.tabBg, () => void $.process.run(['setsid', '-f', 'uwsm-app', '--', 'ghostty', '--title=yt', '-e', `${home}/.local/bin/yt`, ...(yt.query ? [yt.query] : [])], { timeoutMs: 5000 }).catch(() => undefined)),
           ],
         }),
@@ -1783,16 +1815,13 @@ function draw($: any, e: any) {
     const resRows: any[] = yt.busy ? [t([span(`◌ buscando «${clip(yt.query, w - 16)}»…`, C.amber)])] : yt.err ? [t([span('✖ ' + yt.err, C.red)])] : []
     yt.results.forEach((r, i) => {
       const playing = !!cur && cur.id === r.id
+      const dur = r.d ? clockOf(r.d) + ' ' : ''
+      // 3 del número, 1 de separación, la duración y el chip del + (3).
       resRows.push(
-        Box({
-          key: 'yt-r-' + r.id,
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          children: [
-            Button({ key: 'yt-play-' + r.id, label: `${playing ? '▶' : String(i + 1).padStart(2)} ${clip(r.title, Math.max(8, w - 17))}`, plain: true, dimColor: false, onPress: () => void ytPlay($, i) }),
-            Box({ key: 'yt-r-side-' + r.id, flexDirection: 'row', children: [t([span(r.d ? clockOf(r.d) + ' ' : '', playing ? C.lime : C.dim)]), chip('yt-add-' + r.id, '+', false, C.tabBg, () => void ytInsert($, r, false))] }),
-          ],
-        }),
+        ytRow('yt-r-' + r.id, Button({ key: 'yt-play-' + r.id, label: `${(playing ? '▶' : String(i + 1)).padStart(2)} ${ytClip(r.title, Math.max(8, w - 7 - dur.length))}`, plain: true, dimColor: false, onPress: () => void ytPlay($, i) }), [
+          t([span(dur, playing ? C.lime : C.dim)]),
+          chip('yt-add-' + r.id, '+', false, C.tabBg, () => void ytInsert($, r, false)),
+        ]),
       )
     })
     if (yt.results.length || yt.busy || yt.err) out.push(scard('yt-results', yt.query ? `≡ ${clip(yt.query.toUpperCase(), w - 10)}` : '≡ RESULTADOS', C.violet, resRows, 10))
@@ -3000,6 +3029,13 @@ async function ytThumbFor($: any, id: string) {
     ytThumb[id] = r?.exitCode === 0 ? 'ok' : 'fail'
   }
   $.ui.invalidate('ui.render')
+}
+
+// "limpiar cola": además de vaciar la lista hay que cortar la carga del resto de los temas,
+// que si no los sigue agregando de a uno durante un rato.
+async function ytClear($: any) {
+  await $.process.run(['bash', '-c', YT_STOP_FILL, 'nerv-yt-stop-fill'], { timeoutMs: 5000 }).catch(() => undefined)
+  await ytCtl($, ['playlist-clear'])
 }
 
 async function ytCtl($: any, cmd: any[]) {
