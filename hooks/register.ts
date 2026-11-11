@@ -1105,7 +1105,7 @@ export type OrqEstado = 'working' | 'idle' | 'done' | 'blocked' | 'unknown' | 'c
 export type OrqSkill = { nombre: string; cargada: boolean; reciente: boolean }
 export type OrqWorker = { nombre: string; tipo: string; estado: OrqEstado; signo: string; texto: string; tiempo: string; skills: OrqSkill[] }
 export type OrqState = { orquestador: OrqEstado; workers: OrqWorker[] }
-export type OrqTone = 'text' | 'dim' | 'line' | 'pulse' | 'orq' | 'work' | 'ok' | 'bad' | 'gray' | 'hot'
+export type OrqTone = 'text' | 'dim' | 'line' | 'pulse' | 'tail' | 'orq' | 'work' | 'ok' | 'bad' | 'gray' | 'hot'
 export type OrqCell = { ch: string; tone: OrqTone; bold: boolean }
 const ORQ_ESTADOS = ['working', 'idle', 'done', 'blocked', 'unknown', 'cerrado']
 export const ORQ_MAX = 3
@@ -1152,82 +1152,158 @@ export const orqParse = (raw: string): OrqState | undefined => {
 // Hay algo moviéndose en el dibujo: sólo entonces hace falta redibujar en cada cuadro.
 export const orqLive = (st: OrqState | undefined) => !!st && (st.orquestador === 'working' || st.workers.some((w) => w.estado === 'working' || w.estado === 'blocked'))
 
-// Camino de la luz hasta un worker: baja por el tronco (columna `x`) desde la fila 1 hasta la fila de
-// su rama y sigue por `━━▶`. Pares [columna, fila].
-export const orqPath = (x: number, fila: number): [number, number][] => {
+// Camino de un paquete hasta un worker: sale del conector del cartel (columna `x`, fila `desde`), baja
+// por el tronco hasta la fila de su rama y entra por `━▶` hasta la esquina de su tarjeta. Pares [columna, fila].
+export const orqPath = (x: number, desde: number, fila: number): [number, number][] => {
   const camino: [number, number][] = []
-  for (let f = 1; f <= fila; f++) camino.push([x, f])
-  return [...camino, [x + 1, fila], [x + 2, fila], [x + 3, fila]]
+  for (let f = desde; f <= fila; f++) camino.push([x, f])
+  return [...camino, [x + 1, fila], [x + 2, fila]]
 }
 
 // Las (hasta) 3 posiciones del camino que están prendidas en este cuadro; el ciclo deja 4 cuadros de pausa.
+// La primera es la cola y la última la cabeza.
 export const orqPulse = (largo: number, cuadro: number) => {
   const p = cuadro % (largo + 4)
   return [p - 2, p - 1, p].filter((q) => q >= 0 && q < largo)
 }
 
-const ORQ_TONE: Record<string, OrqTone> = { working: 'work', done: 'ok', idle: 'ok', blocked: 'bad' }
-// Columna del tronco.
-const ORQ_X = 2
+// Barra de actividad de un worker que trabaja: un tramo de 4 que va y vuelve ("knight rider").
+export const orqBar = (ancho: number, cuadro: number) => {
+  if (ancho <= 0) return ''
+  const tramo = Math.min(4, ancho)
+  const span = ancho - tramo
+  const pos = span ? (cuadro % (span * 2) <= span ? cuadro % (span * 2) : span * 2 - (cuadro % (span * 2))) : 0
+  return Array.from({ length: ancho }, (_, i) => (i >= pos && i < pos + tramo ? '▰' : '▱')).join('')
+}
+
+// Resumen de una línea para el cartel: "2 trabajando · 1 listo · 1 te necesita".
+export const orqResumen = (st: OrqState) => {
+  const n = (e: OrqEstado[]) => st.workers.filter((w) => e.includes(w.estado)).length
+  const partes = [[n(['working']), 'trabajando'], [n(['blocked']), 'te necesita'], [n(['done']), 'listo'], [n(['idle', 'unknown']), 'en espera']]
+    .filter(([k]) => k)
+    .map(([k, t]) => `${k} ${t === 'listo' && (k as number) > 1 ? 'listos' : t}`)
+  return partes.join(' · ') || 'sin workers'
+}
+
+const ORQ_TONE: Record<string, OrqTone> = { working: 'work', done: 'ok', idle: 'gray', blocked: 'bad' }
+// Columna del tronco (debajo del conector del cartel) y columna donde empiezan las tarjetas.
+const ORQ_X = 3
+const ORQ_CX = ORQ_X + 3
 
 // El dibujo vertical como grilla de celdas y dónde quedó el nombre de cada worker (para su botón).
+// Arriba el cartel del orquestador; del conector baja un tronco con una rama por worker que entra a su
+// tarjeta. Lo que se mueve: un brillo que recorre el borde del cartel mientras piensa, paquetes que bajan
+// por el tronco hasta cada worker que trabaja, la barra de actividad y el parpadeo del que te necesita.
 export const orqDraw = (ancho: number, st: OrqState | undefined, cuadro: number) => {
   const rows: OrqCell[][] = []
   const hits: { nombre: string; y: number; x0: number; x1: number }[] = []
-  // Escribe los tramos uno atrás del otro; lo que no entra en el ancho se corta con "…".
-  const put = (x: number, y: number, parts: [string, OrqTone, boolean?][]) => {
+  const fila = (y: number) => {
     while (rows.length <= y) rows.push(Array.from({ length: ancho }, () => ({ ch: ' ', tone: 'text' as OrqTone, bold: false })))
+    return rows[y]!
+  }
+  // Escribe los tramos uno atrás del otro hasta `hasta` (sin incluir); lo que no entra se corta con "…".
+  const put = (x: number, y: number, parts: [string, OrqTone, boolean?][], hasta = ancho) => {
+    const r = fila(y)
+    const lim = Math.min(hasta, ancho)
     for (const [s, tone, bold] of parts)
       for (const ch of Array.from(s)) {
-        if (x < ancho) rows[y][x] = { ch, tone, bold: !!bold }
-        else if (ancho > 0) rows[y][ancho - 1] = { ...rows[y][ancho - 1], ch: '…' }
+        if (x < lim) r[x] = { ch, tone, bold: !!bold }
+        else if (lim > 0 && x === lim) r[lim - 1] = { ...r[lim - 1]!, ch: '…' }
         x++
       }
-    return Math.min(x, ancho)
+    return Math.min(x, lim)
   }
+  const tint = (x: number, y: number, tone: OrqTone, ch?: string) => {
+    if (y >= rows.length || x < 0 || x >= ancho) return
+    const r = rows[y]!
+    r[x] = { ch: ch ?? r[x]!.ch, tone, bold: true }
+  }
+  // Una caja de `x0` a `x1` (incluidos) entre las filas `y0` e `y1`, con título en el borde de arriba
+  // y algo a la derecha (`fin`). Devuelve las celdas del borde en orden, para el brillo.
+  const box = (x0: number, x1: number, y0: number, y1: number, tone: OrqTone, titulo: [string, OrqTone, boolean?][], fin: [string, OrqTone][] = []) => {
+    const w = x1 - x0 + 1
+    put(x0, y0, [['╭' + '─'.repeat(Math.max(0, w - 2)) + '╮', tone]])
+    put(x0, y1, [['╰' + '─'.repeat(Math.max(0, w - 2)) + '╯', tone]])
+    for (let y = y0 + 1; y < y1; y++) {
+      put(x0, y, [['│', tone]])
+      put(x1, y, [['│', tone]])
+    }
+    const finLen = fin.reduce((k, [s]) => k + Array.from(s).length, 0)
+    const finX = finLen ? x1 - 1 - finLen : x1
+    if (finLen && finX > x0 + 3) put(finX - 1, y0, [[' ', tone], ...fin, [' ', tone]], x1)
+    const tx = put(x0 + 2, y0, [[' ', tone], ...titulo, [' ', tone]], finLen && finX > x0 + 3 ? finX - 1 : x1 - 1)
+    const borde: [number, number][] = []
+    for (let x = x0; x <= x1; x++) borde.push([x, y0])
+    for (let y = y0 + 1; y <= y1; y++) borde.push([x1, y])
+    for (let x = x1 - 1; x >= x0; x--) borde.push([x, y1])
+    for (let y = y1 - 1; y > y0; y--) borde.push([x0, y])
+    return { tx, borde }
+  }
+
   const pensando = st?.orquestador === 'working'
-  put(ORQ_X, 0, [['◆ orquestador' + (pensando ? ' ' + ORQ_SPIN[cuadro % ORQ_SPIN.length] : ''), pensando ? 'orq' : 'text', true]])
-  if (!st) {
-    put(ORQ_X, 1, [['sin datos', 'dim']])
-    return { rows, hits }
+  const hx1 = ancho - 2
+  const spin = pensando ? ORQ_SPIN[cuadro % ORQ_SPIN.length] : ''
+  const hub = box(1, hx1, 0, 2, pensando ? 'orq' : 'line', [['◆ orquestador', pensando ? 'orq' : 'text', true]], spin ? [[spin, 'orq']] : [])
+  put(3, 1, [[!st ? 'sin datos' : pensando ? 'pensando · ' + orqResumen(st) : orqResumen(st), !st ? 'dim' : pensando ? 'text' : 'dim']], hx1)
+  if (pensando) {
+    // Brillo de 3 celdas que da la vuelta al borde del cartel.
+    const n = hub.borde.length
+    for (let k = 0; k < 3; k++) {
+      const [x, y] = hub.borde[(cuadro + k) % n]!
+      tint(x, y, k === 2 ? 'pulse' : 'tail')
+    }
   }
+  if (!st) return { rows, hits }
   const ws = st.workers.slice(0, ORQ_MAX)
   if (!ws.length) {
-    put(ORQ_X, 1, [['sin workers', 'dim']])
-    put(ORQ_X, 2, [['pedile algo al orquestador', 'dim']])
+    put(ORQ_X, 2, [['┬', 'line']])
+    put(ORQ_X, 3, [['┆', 'line']])
+    put(ORQ_X, 4, [['┆', 'line'], ['  pedile algo al orquestador', 'dim']])
+    put(ORQ_X, 5, [['┆', 'line'], ['  y acá vas a ver el flujo', 'dim']])
     return { rows, hits }
   }
-  put(ORQ_X, 1, [['┃', 'line']])
+  put(ORQ_X, 2, [['┬', pensando ? 'orq' : 'line']])
+  put(ORQ_X, 3, [['┃', 'line']])
+  const cx1 = ancho - 2
+  const inner = cx1 - ORQ_CX - 3
   const ramas: number[] = []
-  let y = 2
+  let y = 4
   ws.forEach((w, i) => {
     const last = i === ws.length - 1
-    const from = y
-    const tone: OrqTone = w.estado === 'blocked' && cuadro % 6 < 3 ? 'dim' : ORQ_TONE[w.estado] || 'gray'
-    ramas.push(y)
-    put(ORQ_X, y, [[(last ? '┗' : '┣') + '━━▶ ', 'line']])
-    const x0 = ORQ_X + 5
-    const x1 = put(x0, y++, [[(w.signo ? w.signo + ' ' : '') + w.nombre, tone, true]])
-    hits.push({ nombre: w.nombre, y: y - 1, x0, x1 })
-    // Lo de abajo va alineado con el nombre, pasando el signo.
-    const xd = x0 + (w.signo ? Array.from(w.signo).length + 1 : 0)
-    const det = ([[w.tipo, 'dim'], [w.texto, tone], [w.tiempo, 'dim']] as [string, OrqTone][]).filter(([s]) => s)
-    if (det.length) put(xd, y++, det.flatMap((d, j) => (j ? [[' · ', 'dim'] as [string, OrqTone], d] : [d])))
+    const parpadeo = w.estado === 'blocked' && cuadro % 6 < 3
+    const tone: OrqTone = parpadeo ? 'dim' : ORQ_TONE[w.estado] || 'gray'
+    const borde: OrqTone = w.estado === 'working' || w.estado === 'blocked' ? tone : w.estado === 'done' ? 'ok' : 'line'
+    const y0 = y
+    ramas.push(y0)
+    put(ORQ_X, y0, [[last ? '┗' : '┣', 'line'], ['━▶', w.estado === 'working' ? 'work' : 'line']])
+    // Contenido: tipo · texto, la barra si trabaja, el aviso si te necesita y las skills.
+    const lineas: [string, OrqTone, boolean?][][] = []
+    const det = ([[w.tipo, 'dim'], [w.texto, tone]] as [string, OrqTone][]).filter(([s]) => s)
+    if (det.length) lineas.push(det.flatMap((d, j) => (j ? [[' · ', 'dim'] as [string, OrqTone], d] : [d])))
+    if (w.estado === 'working') lineas.push([[orqBar(inner, cuadro), 'work']])
+    if (w.estado === 'blocked') lineas.push([['⚠ te necesita · tocá para ir', parpadeo ? 'dim' : 'bad', true]])
     const sk = w.skills.length > ORQ_SKILLS ? w.skills.slice(0, ORQ_SKILLS - 1) : w.skills
-    for (const k of sk) put(xd, y++, [['┄ ' + k.nombre, k.reciente ? 'hot' : k.cargada ? 'text' : 'dim', k.reciente]])
-    if (sk.length < w.skills.length) put(xd, y++, [[`┄ +${w.skills.length - sk.length} más`, 'dim']])
-    if (!last) {
-      for (let f = from + 1; f <= y; f++) put(ORQ_X, f, [['┃', 'line']])
-      y++
-    }
+    for (const k of sk) lineas.push([['┄ ' + k.nombre, k.reciente ? 'hot' : k.cargada ? 'text' : 'dim', k.reciente]])
+    if (sk.length < w.skills.length) lineas.push([[`┄ +${w.skills.length - sk.length} más`, 'dim']])
+    const y1 = y0 + lineas.length + 1
+    const signo = w.signo ? w.signo + ' ' : ''
+    const titulo = box(ORQ_CX, cx1, y0, y1, borde, [[signo + w.nombre, tone, true]], w.tiempo ? [[w.tiempo, 'dim']] : [])
+    const x0 = ORQ_CX + 3
+    hits.push({ nombre: w.nombre, y: y0, x0, x1: Math.max(x0, Math.min(x0 + Array.from(signo + w.nombre).length, titulo.tx)) })
+    lineas.forEach((l, j) => put(ORQ_CX + 2, y0 + 1 + j, l, cx1 - 1))
+    if (!last) for (let f = y0 + 1; f <= y1 + 1; f++) put(ORQ_X, f, [['┃', 'line']])
+    y = y1 + 2
   })
+  // Paquetes: bajan del conector del cartel hasta cada worker que trabaja (cabeza ● y dos de estela).
   ws.forEach((w, i) => {
     if (w.estado !== 'working') return
-    const camino = orqPath(ORQ_X, ramas[i])
-    for (const q of orqPulse(camino.length, cuadro)) {
-      const [c, f] = camino[q]
-      if (c < ancho) rows[f][c] = { ...rows[f][c], tone: 'pulse', bold: true }
-    }
+    const camino = orqPath(ORQ_X, 2, ramas[i]!)
+    const luz = orqPulse(camino.length, cuadro + i * 3)
+    luz.forEach((q, k) => {
+      const [c, f] = camino[q]!
+      const cabeza = k === luz.length - 1
+      tint(c, f, cabeza ? 'pulse' : 'tail', cabeza && c === ORQ_X && f > 2 ? '●' : undefined)
+    })
   })
   return { rows, hits }
 }
@@ -1443,7 +1519,7 @@ function draw($: any, e: any) {
       const source = imgSource($, `${$.plugin.root}/assets/orq/${themeId}/${String(f).padStart(2, '0')}.png`)
       if (source) banner.push(Box({ key: 'orq-banner', children: [Image({ key: 'orq-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
     }
-    const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
+    const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, tail: C.violet, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
     const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqState, frame)
     // Corta la fila en tramos del mismo color, sin los espacios del final.
     const runs = (row: OrqCell[], from: number, to: number) => {
@@ -1465,7 +1541,7 @@ function draw($: any, e: any) {
       const h = hits.find((x) => x.y === y)
       if (!h) return t(end(row) ? runs(row, 0, end(row)) : [' '])
       const press = () => void $.process.run(['orq', 'enfocar', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
-      return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) })] })
+      return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) }), ...(end(row) > h.x1 ? [t(runs(row, h.x1, end(row)))] : [])] })
     })
     return Box({ flexDirection: 'column', children: [...flaps, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
   }
