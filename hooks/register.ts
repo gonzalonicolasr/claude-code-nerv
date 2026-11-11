@@ -955,7 +955,12 @@ function startFast($: any) {
       frame++
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen || away) return
-      if (orqOn && g0nShownIn(tab) && frame % 8 === 0) void refreshOrq($)
+      if (orqView) {
+        // Con la solapa ORQ a la vista no se dibuja nada de NERV: sólo el estado y, si hay algo animándose, el redibujo.
+        if (frame % 8 === 0) void refreshOrq($)
+        if (orqLive(orqState)) { stats.invalidates++; $.ui.invalidate('ui.render') }
+        return
+      }
       if (tab === 'hw' && frame % 24 === 0) refreshHw($)
       if (tab === 'live' && frame % 12 === 0) void refreshLive($)
       if (tab === 'forge' && frame % 8 === 0) refreshForge($)
@@ -965,10 +970,10 @@ function startFast($: any) {
       if (tab === 'yt' && frame % 8 === 0) ytPoll($)
       if (tab === 'models' && frame % 480 === 0) void refreshModels($)
       if ((tab === 'models' || acctMenu) && frame % 24 === 0) void cpamWatch($)
-      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0 || (orqOn && orqLive(orqState))) { stats.invalidates++; $.ui.invalidate('ui.render') }
+      if (working || battery() || patternBlue || now() < confettiUntil || tab !== 'magi' || frame % 2 === 0) { stats.invalidates++; $.ui.invalidate('ui.render') }
     }),
     $.clock.every(50, () => {
-      if (quiet || !paneOpen || away || tab !== 'magi' || folded.has('sync') || !gauges.length) return
+      if (quiet || !paneOpen || away || orqView || tab !== 'magi' || folded.has('sync') || !gauges.length) return
       for (const g of gauges) $.ui.blit({ requestId: PANE, key: g.key, cells: gaugeCells(g.p, g.w, g.hue), columns: g.w, rows: 1 }).catch(() => undefined)
     }),
     $.clock.every(G0N_MS / 2, () => {
@@ -1067,8 +1072,9 @@ export const g0nShownIn = (tabId: string) => tabId !== 'live'
 // El medidor de EFFORT de abajo también se oculta en EN VIVO: esas filas van a las cámaras.
 export const effortShownIn = (tabId: string) => tabId !== 'live'
 
-// Flujo del orquestador: sólo en la sesión con ORQ_ROL=orquestador, en el lugar del cartel g0n.
-// El estado sale de `orq estado --json` (o de ORQ_ESTADO_CMD) más o menos una vez por segundo.
+// Flujo del orquestador: sólo en la sesión con ORQ_ROL=orquestador. Arriba del panel hay dos solapas,
+// NERV (la barra de siempre) y ORQ (el panel entero para el flujo). Con ORQ a la vista el estado sale
+// de `orq estado --json` (o de ORQ_ESTADO_CMD) una vez por segundo.
 export type OrqEstado = 'working' | 'idle' | 'done' | 'blocked' | 'unknown' | 'cerrado'
 export type OrqSkill = { nombre: string; cargada: boolean; reciente: boolean }
 export type OrqWorker = { nombre: string; tipo: string; estado: OrqEstado; signo: string; texto: string; tiempo: string; skills: OrqSkill[] }
@@ -1083,6 +1089,9 @@ const ORQ_SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 // Verde fijo para "terminó": el `lime` del tema es amarillo o gris en varias unidades.
 const ORQ_GREEN = '#4ade80'
 let orqOn = false
+// Solapa ORQ a la vista. Es de esta sesión: no se guarda ni se comparte.
+let orqView = false
+let orqRaw = ''
 let orqCmd = 'orq estado --json'
 let orqState: OrqState | undefined
 let orqBusy = false
@@ -1117,15 +1126,12 @@ export const orqParse = (raw: string): OrqState | undefined => {
 // Hay algo moviéndose en el dibujo: sólo entonces hace falta redibujar en cada cuadro.
 export const orqLive = (st: OrqState | undefined) => !!st && (st.orquestador === 'working' || st.workers.some((w) => w.estado === 'working' || w.estado === 'blocked'))
 
-// Columna de cada worker: el centro de su franja.
-export const orqXs = (ancho: number, n: number) => Array.from({ length: n }, (_, i) => Math.floor(((i + 0.5) * ancho) / n))
-
-// Camino de la luz: tronco, rama hasta la columna del worker y su bajada. Pares [columna, fila].
-export const orqPath = (cx: number, x: number): [number, number][] => {
-  const paso = x >= cx ? 1 : -1
-  const rama: [number, number][] = []
-  for (let c = cx; c !== x + paso; c += paso) rama.push([c, 2])
-  return [[cx, 1], ...rama, [x, 3], [x, 4]]
+// Camino de la luz hasta un worker: baja por el tronco (columna `x`) desde la fila 1 hasta la fila de
+// su rama y sigue por `━━▶`. Pares [columna, fila].
+export const orqPath = (x: number, fila: number): [number, number][] => {
+  const camino: [number, number][] = []
+  for (let f = 1; f <= fila; f++) camino.push([x, f])
+  return [...camino, [x + 1, fila], [x + 2, fila], [x + 3, fila]]
 }
 
 // Las (hasta) 3 posiciones del camino que están prendidas en este cuadro; el ciclo deja 4 cuadros de pausa.
@@ -1134,74 +1140,68 @@ export const orqPulse = (largo: number, cuadro: number) => {
   return [p - 2, p - 1, p].filter((q) => q >= 0 && q < largo)
 }
 
-export const orqFit = (s: string, tope: number) => {
-  const ch = Array.from(s)
-  return ch.length > tope ? ch.slice(0, Math.max(1, tope - 1)).join('') + '…' : s
-}
-
 const ORQ_TONE: Record<string, OrqTone> = { working: 'work', done: 'ok', idle: 'ok', blocked: 'bad' }
+// Columna del tronco.
+const ORQ_X = 2
 
-// El dibujo como grilla de celdas (misma geometría que `dibujar()` de orq) y dónde quedó el nombre de cada worker.
+// El dibujo vertical como grilla de celdas y dónde quedó el nombre de cada worker (para su botón).
 export const orqDraw = (ancho: number, st: OrqState | undefined, cuadro: number) => {
   const rows: OrqCell[][] = []
   const hits: { nombre: string; y: number; x0: number; x1: number }[] = []
-  const put = (x: number, y: number, s: string, tone: OrqTone, bold = false) => {
+  // Escribe los tramos uno atrás del otro; lo que no entra en el ancho se corta con "…".
+  const put = (x: number, y: number, parts: [string, OrqTone, boolean?][]) => {
     while (rows.length <= y) rows.push(Array.from({ length: ancho }, () => ({ ch: ' ', tone: 'text' as OrqTone, bold: false })))
-    Array.from(s).forEach((ch, i) => {
-      if (x + i >= 0 && x + i < ancho) rows[y][x + i] = { ch, tone, bold }
-    })
+    for (const [s, tone, bold] of parts)
+      for (const ch of Array.from(s)) {
+        if (x < ancho) rows[y][x] = { ch, tone, bold: !!bold }
+        else if (ancho > 0) rows[y][ancho - 1] = { ...rows[y][ancho - 1], ch: '…' }
+        x++
+      }
+    return Math.min(x, ancho)
   }
-  const center = (cx: number, y: number, s: string, tone: OrqTone, bold = false, tope = ancho) => {
-    const fit = orqFit(s, tope)
-    const n = Array.from(fit).length
-    const x = Math.max(0, Math.min(ancho - n, cx - Math.floor(n / 2)))
-    put(x, y, fit, tone, bold)
-    return [x, x + n]
-  }
-  const cx = Math.floor(ancho / 2)
   const pensando = st?.orquestador === 'working'
-  center(cx, 0, '◆ orquestador' + (pensando ? ' ' + ORQ_SPIN[cuadro % ORQ_SPIN.length] : ''), pensando ? 'orq' : 'text', true)
+  put(ORQ_X, 0, [['◆ orquestador' + (pensando ? ' ' + ORQ_SPIN[cuadro % ORQ_SPIN.length] : ''), pensando ? 'orq' : 'text', true]])
   if (!st) {
-    center(cx, 1, 'sin datos', 'dim')
+    put(ORQ_X, 1, [['sin datos', 'dim']])
     return { rows, hits }
   }
   const ws = st.workers.slice(0, ORQ_MAX)
   if (!ws.length) {
-    center(cx, 2, 'sin workers', 'dim')
-    center(cx, 3, 'pedile algo al orquestador', 'dim')
+    put(ORQ_X, 1, [['sin workers', 'dim']])
+    put(ORQ_X, 2, [['pedile algo al orquestador', 'dim']])
     return { rows, hits }
   }
-  const n = ws.length
-  const xs = orqXs(ancho, n)
-  const izq = Math.min(xs[0], cx)
-  const der = Math.max(xs[n - 1], cx)
-  put(cx, 1, '┃', 'line')
-  for (let x = izq; x <= der; x++) put(x, 2, '━', 'line')
-  for (const x of xs) {
-    put(x, 2, x === izq && x !== cx ? '┏' : x === der && x !== cx ? '┓' : '┳', 'line')
-    put(x, 3, '┃', 'line')
-    put(x, 4, '▼', 'line')
-  }
-  put(cx, 2, n === 1 ? '┃' : xs.includes(cx) ? '╋' : '┻', 'line')
-  const tope = Math.max(4, Math.floor(ancho / n) - 1)
+  put(ORQ_X, 1, [['┃', 'line']])
+  const ramas: number[] = []
+  let y = 2
   ws.forEach((w, i) => {
-    const x = xs[i]
-    if (w.estado === 'working') {
-      const camino = orqPath(cx, x)
-      for (const q of orqPulse(camino.length, cuadro)) {
-        const [c, f] = camino[q]
-        put(c, f, rows[f][c].ch, 'pulse', true)
-      }
-    }
+    const last = i === ws.length - 1
+    const from = y
     const tone: OrqTone = w.estado === 'blocked' && cuadro % 6 < 3 ? 'dim' : ORQ_TONE[w.estado] || 'gray'
-    const [x0, x1] = center(x, 5, (w.signo ? w.signo + ' ' : '') + w.nombre, tone, true, tope)
-    hits.push({ nombre: w.nombre, y: 5, x0, x1 })
-    if (w.tipo) center(x, 6, w.tipo, 'dim', false, tope)
-    if (w.texto) center(x, 7, w.texto, tone, false, tope)
-    if (w.tiempo) center(x, 8, w.tiempo, 'dim', false, tope)
+    ramas.push(y)
+    put(ORQ_X, y, [[(last ? '┗' : '┣') + '━━▶ ', 'line']])
+    const x0 = ORQ_X + 5
+    const x1 = put(x0, y++, [[(w.signo ? w.signo + ' ' : '') + w.nombre, tone, true]])
+    hits.push({ nombre: w.nombre, y: y - 1, x0, x1 })
+    // Lo de abajo va alineado con el nombre, pasando el signo.
+    const xd = x0 + (w.signo ? Array.from(w.signo).length + 1 : 0)
+    const det = ([[w.tipo, 'dim'], [w.texto, tone], [w.tiempo, 'dim']] as [string, OrqTone][]).filter(([s]) => s)
+    if (det.length) put(xd, y++, det.flatMap((d, j) => (j ? [[' · ', 'dim'] as [string, OrqTone], d] : [d])))
     const sk = w.skills.length > ORQ_SKILLS ? w.skills.slice(0, ORQ_SKILLS - 1) : w.skills
-    sk.forEach((k, j) => center(x, 9 + j, '┄ ' + k.nombre, k.reciente ? 'hot' : k.cargada ? 'text' : 'dim', k.reciente, tope))
-    if (sk.length < w.skills.length) center(x, 9 + sk.length, `┄ +${w.skills.length - sk.length} más`, 'dim', false, tope)
+    for (const k of sk) put(xd, y++, [['┄ ' + k.nombre, k.reciente ? 'hot' : k.cargada ? 'text' : 'dim', k.reciente]])
+    if (sk.length < w.skills.length) put(xd, y++, [[`┄ +${w.skills.length - sk.length} más`, 'dim']])
+    if (!last) {
+      for (let f = from + 1; f <= y; f++) put(ORQ_X, f, [['┃', 'line']])
+      y++
+    }
+  })
+  ws.forEach((w, i) => {
+    if (w.estado !== 'working') return
+    const camino = orqPath(ORQ_X, ramas[i])
+    for (const q of orqPulse(camino.length, cuadro)) {
+      const [c, f] = camino[q]
+      if (c < ancho) rows[f][c] = { ...rows[f][c], tone: 'pulse', bold: true }
+    }
   })
   return { rows, hits }
 }
@@ -1211,7 +1211,17 @@ async function refreshOrq($: any) {
   orqBusy = true
   const r = await $.process.run(orqCmd.trim().split(/\s+/), { timeoutMs: 3000 }).catch(() => undefined)
   orqBusy = false
-  orqState = r?.exitCode === 0 ? orqParse(r.stdout) : undefined
+  const raw = r?.exitCode === 0 ? String(r.stdout) : ''
+  if (raw === orqRaw) return
+  orqRaw = raw
+  orqState = orqParse(raw)
+  $.ui.invalidate('ui.render')
+}
+
+function setOrqView($: any, next: boolean) {
+  orqView = orqOn && next
+  if (orqView) void refreshOrq($)
+  $.ui.invalidate('ui.render')
 }
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -1394,22 +1404,14 @@ function draw($: any, e: any) {
   const chip = (key: string, label: string, active: boolean, bg: string, onPress: () => void) =>
     Box({ key: 'box-' + key, paddingX: 1, backgroundColor: active ? bg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active, onPress })] })
 
-  const out: any[] = []
-  const alert = battery()
-  const ink = C.ink
-  const magi = ['メルキオール', 'バルタザール', 'カスパー']
-  const vote = (i: number) => {
-    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: blink() ? C.lime : C.purple, bg: C.chipDim, on: true }
-    if (working && Math.floor(frame / 6) % 3 === i) return { word: '審議', fg: C.lime, bg: C.chipDim, on: true }
-    if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
-    return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
-  }
-  if (!g0nShownIn(tab)) g0nShown = -1
-  else if (orqOn) {
+  const orqFlap = (id: string, label: string, on: boolean) =>
+    Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id === 'orq') })] })
+  const flaps = orqOn ? [Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView)] }), t([span('─'.repeat(Math.max(0, cols)), C.dim)])] : []
+  if (orqView) {
     g0nShown = -1
     const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
-    const { rows, hits } = orqDraw(Math.max(1, cols - 2), orqState, frame)
-    // Corta la fila en tramos del mismo color; `to` deja afuera los espacios del final.
+    const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqState, frame)
+    // Corta la fila en tramos del mismo color, sin los espacios del final.
     const runs = (row: OrqCell[], from: number, to: number) => {
       const parts: any[] = []
       for (let i = from; i < to; ) {
@@ -1425,25 +1427,26 @@ function draw($: any, e: any) {
       while (n > 0 && row[n - 1].ch === ' ') n--
       return n
     }
-    out.push(
-      Box({
-        key: 'orq-flow',
-        flexDirection: 'column',
-        children: rows.map((row, y) => {
-          const mine = hits.filter((h) => h.y === y)
-          if (!mine.length) return t(runs(row, 0, end(row)).concat(end(row) ? [] : [' ']))
-          const parts: any[] = []
-          let at = 0
-          for (const h of mine) {
-            if (h.x0 > at) parts.push(t(runs(row, at, h.x0)))
-            parts.push(Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: () => void $.process.run(['herdr', 'agent', 'focus', h.nombre], { timeoutMs: 5000 }).catch(() => undefined), children: runs(row, h.x0, h.x1) }))
-            at = h.x1
-          }
-          return Box({ key: 'orq-names', flexDirection: 'row', children: parts })
-        }),
-      }),
-    )
-  } else if (Image && e.surface === 'terminal') {
+    const flow = rows.map((row, y) => {
+      const h = hits.find((x) => x.y === y)
+      if (!h) return t(end(row) ? runs(row, 0, end(row)) : [' '])
+      const press = () => void $.process.run(['herdr', 'agent', 'focus', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
+      return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) })] })
+    })
+    return Box({ flexDirection: 'column', children: [...flaps, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
+  }
+  const out: any[] = [...flaps]
+  const alert = battery()
+  const ink = C.ink
+  const magi = ['メルキオール', 'バルタザール', 'カスパー']
+  const vote = (i: number) => {
+    if (alert || (patternBlue && i === 2)) return { word: '否決', fg: blink() ? C.lime : C.purple, bg: C.chipDim, on: true }
+    if (working && Math.floor(frame / 6) % 3 === i) return { word: '審議', fg: C.lime, bg: C.chipDim, on: true }
+    if (working) return { word: '待機', fg: C.dim, bg: C.chipDim, on: false }
+    return { word: '承認', fg: C.muted, bg: C.chipDim, on: false }
+  }
+  if (!g0nShownIn(tab)) g0nShown = -1
+  else if (Image && e.surface === 'terminal') {
     const f = g0nFrame()
     g0nShown = f
     const source = imgSource($, `${$.plugin.root}/assets/g0n/${themeId}/${String(f).padStart(2, '0')}.png`)
@@ -4471,6 +4474,7 @@ export function register(on: any) {
     if (mdlCpam) void refreshModels($)
     ctxEnv = String((await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS').catch(() => '')) || '')
     orqOn = (await $.env.get('ORQ_ROL').catch(() => '')) === 'orquestador'
+    orqView = orqOn
     if (orqOn) {
       orqCmd = String((await $.env.get('ORQ_ESTADO_CMD').catch(() => '')) || '') || orqCmd
       void refreshOrq($)
@@ -4496,7 +4500,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: '[quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | modelos | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: (orqOn ? '[orq | ' : '[') + 'quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | modelos | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -4575,7 +4579,9 @@ export function register(on: any) {
       if (!(await setTheme($, id))) return { text: `uso: /nerv tema <${THEME_IDS.join('|')}> · activo: ${themeId}` }
       return { text: `NERV: unidad ${THEMES[themeId].label}` }
     }
+    if (arg === 'orq' && orqOn) setOrqView($, true)
     if (arg === 'yt' || arg.startsWith('yt ')) {
+      orqView = false
       tab = 'yt'
       await $.store.set('tab', tab).catch(() => undefined)
       const q = String(e.args || '').trim().slice(2).trim()
@@ -4585,11 +4591,13 @@ export function register(on: any) {
       } else await ytPoll($)
     }
     if (arg === 'modelos' || arg === 'models') {
+      orqView = false
       tab = 'models'
       await $.store.set('tab', tab).catch(() => undefined)
       await refreshModels($, true)
     }
     if (arg === 'hw' || arg === 'vivo' || arg === 'live' || arg === 'magi' || arg === 'forge' || arg === 'git' || arg === 'nodd' || arg === 'cortex') {
+      orqView = false
       tab = arg === 'hw' ? 'hw' : arg === 'vivo' || arg === 'live' ? 'live' : arg === 'forge' ? 'forge' : arg === 'git' ? 'git' : arg === 'nodd' ? 'nodd' : arg === 'cortex' ? 'cortex' : 'magi'
       await $.store.set('tab', tab).catch(() => undefined)
       if (tab === 'hw') await refreshHw($)
