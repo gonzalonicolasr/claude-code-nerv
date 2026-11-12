@@ -2067,6 +2067,51 @@ function draw($: any, e: any) {
       ],
     })
   }
+  // Cuerpo con scroll propio en el dock: la cabecera (y el pie, si hay) quedan fijos y la rueda o las
+  // teclas de scroll mueven el resto (hook ui.scroll), con la barrita de posición a la derecha.
+  const scrollFrame = (head: any[], body: any[], footBox: any, rows: number) => {
+    const view = Math.max(3, rows - measure(head, cols) - measure(footBox, cols))
+    const content = measure(body, cols)
+    cardHits = []
+    let y = measure(head, cols) - bodyOffset
+    for (const item of body) {
+      const hgt = measure(item, cols)
+      const k = item?.props?.key
+      if (k && cardMax[k] !== undefined) cardHits.push({ key: k, top: y, bottom: y + hgt })
+      y += hgt
+    }
+    bodyWin = { top: measure(head, cols), bottom: measure(head, cols) + view }
+    lastView = view
+    lastContent = content
+    bodyMax = Math.max(0, content - view)
+    bodyOffset = Math.max(0, Math.min(bodyOffset, bodyMax))
+    const rail: any[] = []
+    if (bodyMax > 0) {
+      const thumb = Math.max(1, Math.round((view * view) / content))
+      const at = Math.round(((view - thumb) * bodyOffset) / bodyMax)
+      for (let i = 0; i < view; i++) rail.push(Text({ color: i >= at && i < at + thumb ? C.purple : C.dim, children: [i >= at && i < at + thumb ? '┃' : '│'] }))
+    }
+    return Box({
+      flexDirection: 'column',
+      height: rows,
+      children: [
+        Box({ key: 'head', flexDirection: 'column', flexShrink: 0, children: head }),
+        Box({
+          key: 'body',
+          flexDirection: 'row',
+          flexGrow: 1,
+          flexShrink: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          children: [
+            Box({ key: 'body-clip', flexDirection: 'column', flexGrow: 1, overflow: 'hidden', children: [Box({ key: 'body-in', flexDirection: 'column', flexShrink: 0, marginTop: -bodyOffset, children: body })] }),
+            ...(rail.length ? [Box({ key: 'body-bar', flexDirection: 'column', width: 1, children: rail })] : []),
+          ],
+        }),
+        ...(footBox ? [footBox] : []),
+      ],
+    })
+  }
   const chip = (key: string, label: string, active: boolean, bg: string, onPress: () => void) =>
     Box({ key: 'box-' + key, paddingX: 1, backgroundColor: active ? bg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active, onPress })] })
 
@@ -3067,49 +3112,7 @@ function draw($: any, e: any) {
       return Box({ flexDirection: 'column', children: [...out.slice(0, headN), ...(showEffort ? [Box({ key: 'effort-top', flexDirection: 'column', marginTop: 0, children: foot.slice(1) })] : []), ...out.slice(headN)] })
     return Box({ flexDirection: 'column', minHeight: rows || undefined, children: [...out, Box({ key: 'spacer', flexGrow: 1 }), ...(footBox ? [footBox] : [])] })
   }
-  const head = out.slice(0, headN)
-  const body = out.slice(headN)
-  const view = Math.max(3, rows - measure(head, cols) - measure(footBox, cols))
-  const content = measure(body, cols)
-  cardHits = []
-  let y = measure(head, cols) - bodyOffset
-  for (const item of body) {
-    const hgt = measure(item, cols)
-    const k = item?.props?.key
-    if (k && cardMax[k] !== undefined) cardHits.push({ key: k, top: y, bottom: y + hgt })
-    y += hgt
-  }
-  bodyWin = { top: measure(head, cols), bottom: measure(head, cols) + view }
-  lastView = view
-  lastContent = content
-  bodyMax = Math.max(0, content - view)
-  bodyOffset = Math.max(0, Math.min(bodyOffset, bodyMax))
-  const rail: any[] = []
-  if (bodyMax > 0) {
-    const thumb = Math.max(1, Math.round((view * view) / content))
-    const at = Math.round(((view - thumb) * bodyOffset) / bodyMax)
-    for (let i = 0; i < view; i++) rail.push(Text({ color: i >= at && i < at + thumb ? C.purple : C.dim, children: [i >= at && i < at + thumb ? '┃' : '│'] }))
-  }
-  return Box({
-    flexDirection: 'column',
-    height: rows,
-    children: [
-      Box({ key: 'head', flexDirection: 'column', flexShrink: 0, children: head }),
-      Box({
-        key: 'body',
-        flexDirection: 'row',
-        flexGrow: 1,
-        flexShrink: 1,
-        minHeight: 0,
-        overflow: 'hidden',
-        children: [
-          Box({ key: 'body-clip', flexDirection: 'column', flexGrow: 1, overflow: 'hidden', children: [Box({ key: 'body-in', flexDirection: 'column', flexShrink: 0, marginTop: -bodyOffset, children: body })] }),
-          ...(rail.length ? [Box({ key: 'body-bar', flexDirection: 'column', width: 1, children: rail })] : []),
-        ],
-      }),
-      ...(footBox ? [footBox] : []),
-    ],
-  })
+  return scrollFrame(out.slice(0, headN), out.slice(headN), footBox, rows)
 }
 
 const kids = (el: any) => {
