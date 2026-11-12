@@ -2863,3 +2863,125 @@ test('YOUTUBE: limpiar cola también corta la carga del resto de los temas', asy
   expect(sent).toContainEqual(['playlist-clear'])
 })
 
+
+// ── Scroll de ORQ: MODELOS y FLUJO más altos que el panel se mueven con la rueda o las teclas ──
+// La rueda (o una tecla de scroll) sobre el pane, como la manda el engine.
+const rueda = ($: any, by: number) => $.ui.scroll({ component: 'Pane', requestId: 'nerv', offset: Math.max(0, by), by, bodyRows: 30, contentRows: 30, origin: { kind: 'person' } })
+// Lo que dice el indicador '↕ desde-hasta/total', o undefined si no está.
+const indicador = async (m: any) => {
+  const x = /↕ (\d+)-(\d+)\/(\d+)/.exec(JSON.stringify((await m.find({ key: 'orq-scroll' })) ?? ''))
+  return x ? { desde: +x[1], hasta: +x[2], total: +x[3] } : undefined
+}
+const corrido = async (m: any) => -((await m.find({ key: 'body-in' }))?.props?.marginTop ?? 0)
+const OM_MUCHOS = {
+  ...OM_ROLES,
+  tipos: [...OM_ROLES.tipos, 'tester', 'triage'],
+  config: { ...OM_ROLES.config, tester: { modelo: 'haiku', effort: 'low', origen: 'tipo' }, triage: { modelo: 'haiku', effort: 'low', origen: 'tipo' } },
+}
+const OP_24 = Array.from({ length: 24 }, (_, i) => ({ nombre: `perfil-${i}`, descripcion: `Perfil ${i}.`, grupo: ['rápidos', 'baratos', 'mezclas', 'potentes'][i % 4], config: {} }))
+const modelosAlto = async ($: any, on: any, bodyRows = 30) => {
+  // Sin scroll propio (todo entra), la rueda sigue al engine.
+  on('ui.scroll', async () => ({}))
+  const s = await omSession($, on, { json: OM_MUCHOS, fabrica: OP_24, perfiles: { activo: 'perfil-0' } })
+  await s.m.unmount()
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows, contentRows: bodyRows } } })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
+  for (let i = 0; i < 50 && !((await m.find({ key: 'om-t-triage' })) && (await m.find({ key: 'op-p-perfil-23' }))); i++) await new Promise((r) => setTimeout(r, 10))
+  return { ...s, m, texto: async () => JSON.stringify(await m.drawn()) }
+}
+
+test('ORQ MODELOS más alto que el panel: la rueda baja hasta los tipos de abajo y vuelve arriba', async ($, on) => {
+  const { m } = await modelosAlto($, on)
+  // Arriba de todo: el indicador dice qué parte se ve y que hay más abajo; la barrita aparece.
+  const arriba = (await indicador(m))!
+  expect(arriba.desde).toBe(1)
+  expect(arriba.hasta).toBeLessThan(arriba.total)
+  expect(await m.find({ key: 'body-bar' })).toBeDefined()
+  expect(await corrido(m)).toBe(0)
+  // Las solapas quedan fijas en la cabecera, fuera de lo que se mueve.
+  const head = JSON.stringify(await m.find({ key: 'head' }))
+  expect(head).toContain('orqtab-modelos')
+  expect(JSON.stringify(await m.find({ key: 'body-in' }))).not.toContain('orqtab-modelos')
+  // Tres pasos de rueda: baja tres filas.
+  for (let i = 0; i < 3; i++) await rueda($, 1)
+  expect(await indicador(m)).toEqual({ desde: 4, hasta: arriba.hasta + 3, total: arriba.total })
+  expect(await corrido(m)).toBe(3)
+  // End (el engine manda todo el contenido): queda al final, con triage y el último perfil en la ventana.
+  await rueda($, 500)
+  const abajo = (await indicador(m))!
+  expect(abajo.hasta).toBe(abajo.total)
+  expect(await corrido(m)).toBe(abajo.desde - 1)
+  expect(await m.find({ key: 'om-t-triage' })).toBeDefined()
+  // Más rueda no pasa del final; Home vuelve arriba.
+  await rueda($, 5)
+  expect(await indicador(m)).toEqual(abajo)
+  await rueda($, -500)
+  expect(await indicador(m)).toEqual(arriba)
+  expect(await corrido(m)).toBe(0)
+})
+
+test('ORQ MODELOS: después de scrollear, los clicks de modelo, effort, perfil y rol siguen dando el argv exacto', async ($, on) => {
+  const { m, asked, texto } = await modelosAlto($, on)
+  await rueda($, 500)
+  const abajo = (await indicador(m))!
+  await m.press({ key: 'om-q-triage-e-xhigh' })
+  await notaLista(texto, '✓ triage · effort xhigh')
+  expect(omRuns(asked, 'set')).toEqual([['orq', 'modelos', 'set', 'triage', '--effort', 'xhigh']])
+  // Releer después del click (y la nota que aparece) no la manda arriba: sigue donde estaba.
+  expect((await indicador(m))!.desde).toBe(abajo.desde)
+  await m.press({ key: 'om-q-tester-m-opus' })
+  await notaLista(texto, '✓ tester → opus')
+  expect(omRuns(asked, 'set')[1]).toEqual(['orq', 'modelos', 'set', 'tester', '--modelo', 'opus'])
+  await m.press({ key: 'om-r-pensar-e-low' })
+  await notaLista(texto, '✓ pensar (2) · effort low')
+  expect(omRuns(asked, 'set').slice(2)).toEqual(['review', 'security'].map((tp) => ['orq', 'modelos', 'set', tp, '--effort', 'low']))
+  await m.press({ key: 'op-p-perfil-23' })
+  await opListo(texto, '✓ usando perfil-23')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'usar', 'perfil-23']])
+  // Abrir un tipo arranca arriba; volver a la lista también.
+  await m.press({ key: 'om-t-triage' })
+  expect(await corrido(m)).toBe(0)
+})
+
+test('ORQ MODELOS que entra entero no muestra indicador ni barrita, y la rueda no lo mueve', async ($, on) => {
+  const { m } = await modelosAlto($, on, 400)
+  expect(await indicador(m)).toBeUndefined()
+  expect(await m.find({ key: 'body-bar' })).toBeUndefined()
+  await rueda($, 3)
+  expect(await corrido(m)).toBe(0)
+})
+
+test('ORQ FLUJO con más filas que el panel scrollea, con indicador, y el click en un worker sigue enfocándolo', async ($, on) => {
+  const sk = 'abcdef'.split('').map((nombre) => ({ nombre, cargada: false, reciente: false }))
+  const st = { orquestador: 'idle', workers: ['uno', 'dos', 'tres'].map((nombre) => ({ nombre, tipo: 'coding', estado: 'idle', signo: '', texto: 'espera', tiempo: '1 min', skills: sk })) }
+  const { m: m0, asked } = await orqSession($, on, { ORQ_ROL: 'orquestador', ORQ_ESTADO_CMD: '/x/estado --json' }, () => JSON.stringify(st))
+  await m0.unmount()
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: { ...PANE_PROPS, scroll: { offset: 0, bodyRows: 20, contentRows: 20 } } })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  const arriba = (await indicador(m))!
+  expect(arriba.desde).toBe(1)
+  expect(arriba.hasta).toBeLessThan(arriba.total)
+  // El flujo (y el cartel) se mueven; las solapas no.
+  expect(JSON.stringify(await m.find({ key: 'body-in' }))).toContain('orq-flow')
+  expect(JSON.stringify(await m.find({ key: 'head' }))).toContain('orqtab-flujo')
+  await rueda($, 500)
+  const abajo = (await indicador(m))!
+  expect(abajo.hasta).toBe(abajo.total)
+  await m.press({ key: 'orq-w-tres' })
+  expect(asked.some((a) => a.join(' ') === 'orq enfocar tres')).toBe(true)
+  // Pasar a MODELOS arranca arriba, y volver a FLUJO también.
+  await m.press({ key: 'orqtab-modelos' })
+  expect(await corrido(m)).toBe(0)
+  await m.press({ key: 'orqtab-flujo' })
+  expect((await indicador(m))!.desde).toBe(1)
+})
+
+test('ORQ: el scroll de ORQ no se arrastra a las pestañas de NERV', async ($, on) => {
+  const { m } = await modelosAlto($, on)
+  await rueda($, 500)
+  expect(await corrido(m)).toBeGreaterThan(0)
+  await m.press({ key: 'flap-nerv' })
+  expect(await corrido(m)).toBe(0)
+  expect(await m.find({ key: 'orq-scroll' })).toBeUndefined()
+})

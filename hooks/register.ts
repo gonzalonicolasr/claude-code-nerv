@@ -2132,12 +2132,33 @@ function draw($: any, e: any) {
       backgroundColor: orqSub === id ? C.tabBg : undefined,
       children: [Button({ key: 'orqtab-' + id, label: orqSub === id ? `◆ ${label}` : label, hotkey, plain: true, dimColor: orqSub !== id, onPress: () => setOrqView($, true, id) })],
     })
-  const orqTabs = orqView
-    ? [Box({ key: 'orqtabs', flexDirection: 'row', columnGap: 1, children: [orqTab('flujo', 'FLUJO', '1'), orqTab('modelos', 'MODELOS', '2')] }), t([span('─'.repeat(Math.max(0, cols)), C.dim)])]
-    : []
+  // `ind` es la posición del scroll ('↕ 12-40/60'), al final de la línea de abajo de las pestañas.
+  const orqHead = (ind: string) => [
+    ...flaps,
+    Box({ key: 'orqtabs', flexDirection: 'row', columnGap: 1, children: [orqTab('flujo', 'FLUJO', '1'), orqTab('modelos', 'MODELOS', '2')] }),
+    ind ? Box({ key: 'orq-scroll', children: [t([span('─'.repeat(Math.max(0, cols - cellWidth(ind) - 1)) + ' ', C.dim), span(ind, C.muted)])] }) : t([span('─'.repeat(Math.max(0, cols)), C.dim)]),
+  ]
+  // ORQ en el dock scrollea como las pestañas de NERV: cabecera fija y el resto se mueve.
+  const orqFrame = (body: any[]) => {
+    const rows = e.props.scroll?.bodyRows || 0
+    if (!dock) return Box({ flexDirection: 'column', children: [...orqHead(''), ...body] })
+    const view = Math.max(3, rows - measure(orqHead(''), cols))
+    const content = measure(body, cols)
+    const max = Math.max(0, content - view)
+    const off = Math.max(0, Math.min(bodyOffset, max))
+    return scrollFrame(orqHead(max ? `↕ ${off + 1}-${off + view}/${content}` : ''), body, undefined, rows)
+  }
+  if (orqView) {
+    // Cada vista de ORQ (y cada tipo abierto en MODELOS) arranca arriba de todo.
+    const vista = `orq-${orqSub}-${orqSub === 'modelos' ? omTipo : ''}`
+    if (vista !== bodyTab) {
+      bodyTab = vista
+      bodyOffset = 0
+    }
+  }
   if (orqView && orqSub === 'modelos') {
     g0nShown = -1
-    return Box({ flexDirection: 'column', children: [...flaps, ...orqTabs, Box({ key: 'om', flexDirection: 'column', children: drawOrqModelos($, e, { t, span, card, chip, w }) })] })
+    return orqFrame([Box({ key: 'om', flexDirection: 'column', children: drawOrqModelos($, e, { t, span, card, chip, w }) })])
   }
   if (orqView) {
     // El cartel de ORQ usa el reloj y el contador de cuadros del g0n: sólo hay uno de los dos a la vista.
@@ -2180,7 +2201,7 @@ function draw($: any, e: any) {
       const press = () => void $.process.run(['orq', 'enfocar', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
       return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) }), ...(end(row) > h.x1 ? [t(runs(row, h.x1, end(row)))] : [])] })
     })
-    return Box({ flexDirection: 'column', children: [...flaps, ...orqTabs, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
+    return orqFrame([...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })])
   }
   const out: any[] = [...flaps]
   const alert = battery()
