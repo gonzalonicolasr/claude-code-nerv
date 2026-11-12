@@ -1341,7 +1341,9 @@ function setOrqView($: any, next: boolean, sub: 'flujo' | 'modelos' = 'flujo') {
   orqSub = sub
   if (orqView && sub === 'flujo') void refreshOrq($)
   if (orqView && sub === 'modelos') {
+    opBorrar = ''
     void refreshOrqModelos($)
+    void refreshOrqPerfiles($)
     void refreshModels($)
   }
   $.ui.invalidate('ui.render')
@@ -1351,7 +1353,7 @@ function setOrqView($: any, next: boolean, sub: 'flujo' | 'modelos' = 'flujo') {
 // NERV nunca escribe ~/.local/share/orq/modelos.json: lee con `orq modelos --json` y guarda con
 // `orq modelos set|reset`. El catálogo de cuentas es el mismo del CPAM de la pestaña MODELOS.
 export type OrqMdlCfg = { modelo: string; effort: string; origen: 'tipo' | 'default' | 'ninguno' }
-export type OrqModelos = { tipos: string[]; efforts: string[]; aliases: string[]; config: Record<string, OrqMdlCfg> }
+export type OrqModelos = { tipos: string[]; efforts: string[]; aliases: string[]; config: Record<string, OrqMdlCfg>; perfil?: { activo: string | null; modificado: boolean } }
 const ORQ_EFFORTS = ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
 const ORQ_ALIASES = ['opus', 'sonnet', 'haiku', 'fable']
 // Con más modelos que esto en una cuenta aparece el filtro.
@@ -1370,7 +1372,32 @@ export const orqModelosParse = (raw: string): OrqModelos | undefined => {
     if (!v || typeof v !== 'object') continue
     config[k] = { modelo: typeof v.modelo === 'string' ? v.modelo : '', effort: typeof v.effort === 'string' ? v.effort : '', origen: v.origen === 'tipo' || v.origen === 'default' ? v.origen : 'ninguno' }
   }
-  return { tipos: strs(j.tipos, []).filter((x) => x !== '*'), efforts: strs(j.efforts, ORQ_EFFORTS), aliases: strs(j.aliases, ORQ_ALIASES), config }
+  const perfil = j.perfil && typeof j.perfil === 'object' ? { activo: typeof j.perfil.activo === 'string' && j.perfil.activo ? j.perfil.activo : null, modificado: j.perfil.modificado === true } : undefined
+  return { tipos: strs(j.tipos, []).filter((x) => x !== '*'), efforts: strs(j.efforts, ORQ_EFFORTS), aliases: strs(j.aliases, ORQ_ALIASES), config, ...(perfil ? { perfil } : {}) }
+}
+
+// Perfiles de modelos de orq (de fábrica y propios), como los de FORGE: se leen con `orq perfiles --json`
+// y se cambian con `orq perfiles usar|guardar|duplicar|borrar`. NERV nunca escribe perfiles.json.
+export type OrqPerfil = { nombre: string; descripcion: string }
+export type OrqPerfiles = { activo: string | null; modificado: boolean; fabrica: OrqPerfil[]; mios: OrqPerfil[] }
+export const orqPerfilesParse = (raw: string): OrqPerfiles | undefined => {
+  let j: any
+  try {
+    j = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (!j || typeof j !== 'object' || !Array.isArray(j.fabrica)) return undefined
+  const lista = (v: any): OrqPerfil[] =>
+    (Array.isArray(v) ? v : []).filter((p: any) => p && typeof p.nombre === 'string' && p.nombre).map((p: any) => ({ nombre: p.nombre, descripcion: typeof p.descripcion === 'string' ? p.descripcion : '' }))
+  return { activo: typeof j.activo === 'string' && j.activo ? j.activo : null, modificado: j.modificado === true, fabrica: lista(j.fabrica), mios: lista(j.mios) }
+}
+export const orqPerfilArgv = (verbo: 'usar' | 'guardar' | 'duplicar' | 'borrar', ...nombres: string[]) => ['orq', 'perfiles', verbo, ...nombres]
+// Un nombre que todavía no usa ningún perfil: base, base-2, base-3…
+export const orqPerfilLibre = (base: string, usados: readonly string[]) => {
+  let n = base
+  for (let i = 2; usados.includes(n); i++) n = `${base}-${i}`
+  return n
 }
 export const orqModelosSet = (tipo: string, modelo: string, effort: string) => ['orq', 'modelos', 'set', tipo, '--modelo', modelo, '--effort', effort]
 // Las cuentas del CPAM son los grupos con prefijo: un id sin "/" orq lo corre con el plan de Claude.
@@ -1398,6 +1425,142 @@ let omCuenta = ''
 let omModelo = ''
 let omQuery = ''
 let omNota = ''
+let op: OrqPerfiles | undefined
+let opErr = ''
+let opLeyendo: Promise<void> | undefined
+let opAgain = false
+let opNota = ''
+let opAviso = ''
+// Perfil propio con el primer toque de ✕ borrar: el segundo toque lo borra.
+let opBorrar = ''
+
+function refreshOrqPerfiles($: any): Promise<void> {
+  // Si ya hay una lectura en vuelo, se relee al terminarla y quien espera ve la última.
+  if (opLeyendo) return (opAgain = true), opLeyendo
+  const leer = async () => {
+    do {
+      opAgain = false
+      const r = await $.process.run(['orq', 'perfiles', '--json'], { timeoutMs: 5000 }).catch(() => undefined)
+      const p = r?.exitCode === 0 ? orqPerfilesParse(String(r.stdout)) : undefined
+      if (p) op = p
+      opErr = p ? '' : 'orq perfiles --json no contestó'
+    } while (opAgain)
+  }
+  opLeyendo = leer().finally(() => {
+    opLeyendo = undefined
+    $.ui.invalidate('ui.render')
+  })
+  return opLeyendo
+}
+
+// El perfil activo y si se tocó: lo más fresco es lo que trae `orq modelos --json` (se relee tras cada cambio).
+const opActivo = () => om?.perfil ?? (op ? { activo: op.activo, modificado: op.modificado } : { activo: null, modificado: false })
+
+// Corre una acción de perfiles, relee modelos y perfiles, y confirma con lo que quedó de verdad.
+async function orqPerfilRun($: any, argv: string[], ok: string, quedo: () => boolean) {
+  opNota = '… guardando'
+  opAviso = opBorrar = ''
+  $.ui.invalidate('ui.render')
+  const r: any = await $.process.run(argv, { timeoutMs: 15000 }).catch((err: any) => ({ exitCode: undefined, stderr: String(err?.message || err), stdout: '' }))
+  try {
+    opAviso = String(JSON.parse(String(r?.stdout || ''))?.aviso || '')
+  } catch {}
+  await Promise.all([refreshOrqModelos($), refreshOrqPerfiles($)])
+  opNota = r?.exitCode !== 0 ? orqMdlError(r) : quedo() ? ok : '✗ orq dijo que sí, pero al releer no quedó así'
+  $.ui.invalidate('ui.render')
+}
+
+async function askOrqPerfil($: any, pregunta: string, sugerido: string) {
+  const pick = await $.ui.ask(`${pregunta} Escribí el nombre en «Other» o usá el sugerido.`, { options: [sugerido, 'Cancelar'], header: 'orq' }).catch(() => 'Cancelar')
+  const nombre = String(pick || '').trim()
+  return !nombre || nombre === 'Cancelar' ? '' : nombre
+}
+
+const opNombres = () => [...(op?.fabrica || []), ...(op?.mios || [])].map((p) => p.nombre)
+const opEsMio = (n: string) => !!op?.mios.some((p) => p.nombre === n)
+
+async function orqPerfilGuardar($: any) {
+  opBorrar = ''
+  const { activo } = opActivo()
+  const nombre = await askOrqPerfil($, '¿Cómo se llama el perfil nuevo? Guarda los modelos y efforts de ahora.', orqPerfilLibre(activo ? `${activo}-mio` : 'mio', opNombres()))
+  if (nombre) await orqPerfilRun($, orqPerfilArgv('guardar', nombre), `✓ guardado como ${nombre} (activo)`, () => opEsMio(nombre) && opActivo().activo === nombre)
+}
+
+async function orqPerfilDuplicar($: any, origen: string) {
+  opBorrar = ''
+  const nombre = await askOrqPerfil($, `¿Cómo se llama la copia de ${origen}? Queda en MÍOS sin activarse.`, orqPerfilLibre(`${origen}-copia`, opNombres()))
+  if (nombre) await orqPerfilRun($, orqPerfilArgv('duplicar', origen, nombre), `✓ duplicado: ${origen} → ${nombre}`, () => opEsMio(nombre))
+}
+
+function orqPerfilBorrar($: any, nombre: string) {
+  if (opBorrar !== nombre) {
+    opBorrar = nombre
+    opNota = opAviso = ''
+    return $.ui.invalidate('ui.render')
+  }
+  void orqPerfilRun($, orqPerfilArgv('borrar', nombre), `✓ borrado: ${nombre}`, () => !opEsMio(nombre))
+}
+
+function drawOrqPerfiles($: any, e: any, h: any) {
+  const { Box, Button } = $.ui.resolve(e)
+  const { t, span, card, chip, w } = h
+  if (!op) return card('op-perfiles', '◈ PERFIL', C.purple, [t([span(opErr ? '✗ ' + opErr : 'leyendo orq perfiles…', opErr ? C.red : C.muted)])])
+  const { activo, modificado } = opActivo()
+  const desc = [...op.fabrica, ...op.mios].find((p) => p.nombre === activo)?.descripcion || ''
+  const usar = (n: string) => () => void orqPerfilRun($, orqPerfilArgv('usar', n), `✓ usando ${n}`, () => opActivo().activo === n && !opActivo().modificado)
+  const rows: any[] = []
+  if (!activo) rows.push(t([span('sin perfil', C.amber, { bold: true }), span(' · lo de ahora no tiene nombre', C.dim)], undefined, { wrap: 'wrap' }))
+  else {
+    // El nombre y "(modificado)" a la izquierda, ⧉ duplicar a la derecha; si no entra, "(modificado)" baja.
+    const libre = w - '⧉ duplicar'.length - 5
+    const aparte = modificado && libre - 13 < 8
+    rows.push(
+      Box({
+        key: 'op-bar',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        children: [
+          t([span('● ' + clip(activo, modificado && !aparte ? libre - 13 : libre), C.lime, { bold: true }), ...(modificado && !aparte ? [span(' (modificado)', C.amber, { bold: true })] : [])]),
+          chip('op-dup', '⧉ duplicar', false, C.tabBg, () => void orqPerfilDuplicar($, activo)),
+        ],
+      }),
+    )
+    if (aparte) rows.push(t([span('(modificado)', C.amber, { bold: true })]))
+  }
+  if (desc) rows.push(t([span(desc, C.dim)], undefined, { wrap: 'wrap' }))
+  if (opNota) rows.push(t([span(opNota, opNota.startsWith('✓') ? C.lime : opNota.startsWith('✗') ? C.red : C.muted, { bold: !opNota.startsWith('…') })], undefined, { wrap: 'wrap' }))
+  if (opAviso) rows.push(t([span('⚠ ' + opAviso, C.amber)], undefined, { wrap: 'wrap' }))
+  if (opBorrar) rows.push(t([span(`tocá ✕ otra vez para borrar ${opBorrar}`, C.amber, { bold: true })], undefined, { wrap: 'wrap' }))
+  if (opErr) rows.push(t([span('✗ ' + opErr, C.red)]))
+  const sel = (n: string, ancho: number) =>
+    Box({ key: 'opbox-' + n, width: ancho, paddingX: 1, backgroundColor: activo === n ? C.tabBg : C.chipDim, children: [Button({ key: 'op-p-' + n, label: clip((activo === n ? '● ' : '') + n, ancho - 2), plain: true, dimColor: activo !== n, onPress: usar(n) })] })
+  const colW = Math.floor((w - 1) / 2)
+  rows.push(Box({ key: 'op-sec-fabrica', marginTop: 1, children: [t([span('FÁBRICA', C.cyan, { bold: true }), span(` · ${op.fabrica.length}`, C.dim)])] }))
+  for (let i = 0; i < op.fabrica.length; i += 2)
+    rows.push(Box({ key: 'op-fab-' + i, flexDirection: 'row', columnGap: 1, children: op.fabrica.slice(i, i + 2).map((p) => sel(p.nombre, colW)) }))
+  rows.push(
+    Box({
+      key: 'op-sec-mios',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      children: [t([span('MÍOS', C.cyan, { bold: true }), span(` · ${op.mios.length}`, C.dim)]), chip('op-save', '+ guardar como…', false, C.tabBg, () => void orqPerfilGuardar($))],
+    }),
+  )
+  if (!op.mios.length) rows.push(t([span('  ninguno todavía · usá + guardar como…', C.dim)], undefined, { wrap: 'wrap' }))
+  for (const p of op.mios) {
+    const seguro = opBorrar === p.nombre
+    const borrar = w >= 36 ? (seguro ? '✕ ¿seguro?' : '✕ borrar') : seguro ? '✕ ¿?' : '✕'
+    rows.push(
+      Box({
+        key: 'op-mio-' + p.nombre,
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [sel(p.nombre, w - borrar.length - 4), chip('op-del-' + p.nombre, borrar, seguro, C.tabBg, () => orqPerfilBorrar($, p.nombre))],
+      }),
+    )
+  }
+  return card('op-perfiles', clip(`◈ PERFIL · ${activo || 'ninguno'}`, w - 2), C.purple, rows)
+}
 
 async function refreshOrqModelos($: any) {
   // Si ya hay una lectura en vuelo (p. ej. la de entrar a la solapa) y llega un guardado, se relee al terminar.
@@ -1459,6 +1622,7 @@ function drawOrqModelos($: any, e: any, h: any) {
         ],
       })
     }
+    out.push(drawOrqPerfiles($, e, h))
     out.push(
       card('om-list', '◈ MODELOS · ORQ', C.purple, [
         t([span('modelo y effort de cada tipo de worker', C.muted)], undefined, { wrap: 'wrap' }),

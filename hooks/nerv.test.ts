@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -2071,12 +2071,29 @@ const OM_JSON = {
   aliases: ['opus', 'sonnet', 'haiku', 'fable'],
 }
 const OM_IDS = ['priv8/claude-opus-5-5', 'priv8/claude-sonnet-5-5', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
-const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string; json?: any } = {}) => {
+// Perfiles simulados con estado, como los guarda orq: usar/guardar/duplicar/borrar cambian lo que se relee después.
+const OP_FABRICA = [
+  { nombre: 'turbo', descripcion: 'Lo más rápido.', config: {} },
+  { nombre: 'barato', descripcion: 'Barato: Gemini construye.', config: {} },
+  { nombre: 'solo-claude', descripcion: 'Opus, Sonnet y Haiku.', config: {} },
+]
+type OpEstado = { activo: string | null; modificado: boolean; mios: string[] }
+const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string; json?: any; perfiles?: Partial<OpEstado>; nombre?: string; aviso?: string; perfilesRoto?: boolean } = {}) => {
   mock.env(on, { HOME: '/h' })
   mock.store(on)
   const clock = mock.clock(on)
   const asked: string[][] = []
+  const pedidos: any[] = []
+  const st: OpEstado = { activo: 'turbo', modificado: false, mios: ['mio'], ...opts.perfiles }
+  const fab = (n: string) => OP_FABRICA.some((p) => p.nombre === n)
+  const perfilesJson = () => ({ activo: st.activo, modificado: st.modificado, fabrica: OP_FABRICA, mios: st.mios.map((nombre) => ({ nombre, config: {} })) })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
+  // $.ui.ask llega como la herramienta AskUserQuestion: se contesta con el nombre pedido o el sugerido.
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$: any, e: any) => {
+    const q = e.questions[0]
+    pedidos.push({ question: q.question, options: q.options.map((o: any) => o.label) })
+    return { result: { answers: { [q.question]: opts.nombre ?? q.options[0].label } } }
+  })
   on('fs.read', async () => ({ value: '' }))
   on('process.run', async (_$: any, e: any) => {
     const a: string[] = e.argv
@@ -2084,9 +2101,33 @@ const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
     if (a[0] === 'sh' && a[2]?.includes('/v1/models')) return ok(JSON.stringify({ data: OM_IDS.map((id) => ({ id })) }))
     if (a[0] === 'orq' && a[1] === 'estado') return ok(JSON.stringify(ORQ_JSON))
-    if (a.join(' ') === 'orq modelos --json') return ok(JSON.stringify(opts.json ?? OM_JSON))
-    if (a[0] === 'orq' && a[1] === 'modelos' && (a[2] === 'set' || a[2] === 'reset'))
+    if (a.join(' ') === 'orq modelos --json') return ok(JSON.stringify(opts.json ?? { ...OM_JSON, perfil: { activo: st.activo, modificado: st.modificado } }))
+    if (a.join(' ') === 'orq perfiles --json') return ok(opts.perfilesRoto ? 'no es el contrato' : JSON.stringify(perfilesJson()))
+    if (a[0] === 'orq' && a[1] === 'perfiles') {
+      const no = (code: number, error: string) => ({ value: { exitCode: code, stdout: JSON.stringify({ ok: false, error }), stderr: error } })
+      const [, , verbo, x, y] = a
+      if (verbo === 'usar') {
+        if (!fab(x) && !st.mios.includes(x)) return no(2, `No existe el perfil '${x}'.`)
+        Object.assign(st, { activo: x, modificado: false })
+      } else if (verbo === 'guardar') {
+        if (fab(x)) return no(3, `'${x}' es un perfil de fábrica: no se puede pisar. Usá otro nombre.`)
+        if (!st.mios.includes(x)) st.mios.push(x)
+        Object.assign(st, { activo: x, modificado: false })
+      } else if (verbo === 'duplicar') {
+        if (fab(y) || st.mios.includes(y)) return no(3, `'${y}' ya existe.`)
+        st.mios.push(y)
+      } else if (verbo === 'borrar') {
+        if (!st.mios.includes(x)) return no(2, `No existe el perfil propio '${x}'.`)
+        st.mios = st.mios.filter((n) => n !== x)
+        if (st.activo === x) st.activo = null
+      } else return no(1, 'verbo raro')
+      return ok(JSON.stringify({ ok: true, perfil: x, activo: st.activo, ...(opts.aviso ? { aviso: opts.aviso } : {}) }))
+    }
+    if (a[0] === 'orq' && a[1] === 'modelos' && (a[2] === 'set' || a[2] === 'reset')) {
+      // Con uno de fábrica activo, tocar un modelo lo deja "modificado" (contrato 3).
+      if (!opts.code && st.activo && fab(st.activo)) st.modificado = true
       return opts.code ? { value: { exitCode: opts.code, stdout: '', stderr: opts.stderr || '' } } : ok(JSON.stringify({ ok: true, tipo: a[3] }))
+    }
     return { value: { exitCode: 1, stdout: '', stderr: '' } }
   })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
@@ -2098,7 +2139,20 @@ const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string
     expect(await m.find({ key })).toBeDefined()
   }
   const texto = async () => JSON.stringify(await m.drawn())
-  return { m, asked, hasta, texto }
+  return { m, asked, hasta, texto, clock, st, pedidos }
+}
+const opRuns = (asked: string[][]) => asked.filter((a) => a[0] === 'orq' && a[1] === 'perfiles' && a[2] !== '--json')
+const lecturas = (asked: string[][], que: 'modelos' | 'perfiles') => asked.filter((a) => a.join(' ') === `orq ${que} --json`).length
+// Espera a que el aviso del perfil diga algo distinto de "… guardando".
+const opListo = async (texto: () => Promise<string>, aguja: string) => {
+  for (let i = 0; i < 80 && !(await texto()).includes(aguja); i++) await new Promise((r) => setTimeout(r, 10))
+  expect(await texto()).toContain(aguja)
+}
+const enModelos = async (m: any, hasta: (k: string) => Promise<void>) => {
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
+  await hasta('op-p-turbo')
+  await hasta('om-t-backend')
 }
 const omRuns = (asked: string[][], verbo: string) => asked.filter((a) => a[0] === 'orq' && a[1] === 'modelos' && a[2] === verbo)
 
@@ -2262,6 +2316,181 @@ test('MODELOS de orq: si orq modelos --json no contesta lo dice en vez de quedar
   expect(await texto()).toContain('✗ orq modelos --json no contestó')
 })
 
+test('orqPerfilesParse lee el contrato y descarta lo que no entiende; orqPerfilLibre no pisa nombres', () => {
+  const p = orqPerfilesParse(JSON.stringify({ activo: 'turbo', modificado: true, fabrica: OP_FABRICA, mios: [{ nombre: 'mio', config: {} }, { config: {} }] }))!
+  expect(p.activo).toBe('turbo')
+  expect(p.modificado).toBe(true)
+  expect(p.fabrica.map((x) => x.nombre)).toEqual(['turbo', 'barato', 'solo-claude'])
+  expect(p.fabrica[0].descripcion).toBe('Lo más rápido.')
+  expect(p.mios).toEqual([{ nombre: 'mio', descripcion: '' }])
+  const flaco = orqPerfilesParse(JSON.stringify({ activo: null, fabrica: [] }))!
+  expect(flaco).toEqual({ activo: null, modificado: false, fabrica: [], mios: [] })
+  expect(orqPerfilesParse('nada')).toBeUndefined()
+  expect(orqPerfilesParse('{"activo":"x"}')).toBeUndefined()
+  expect(orqPerfilArgv('duplicar', 'turbo', 'turbo-copia')).toEqual(['orq', 'perfiles', 'duplicar', 'turbo', 'turbo-copia'])
+  expect(orqPerfilLibre('mio', ['mio', 'mio-2'])).toBe('mio-3')
+  expect(orqPerfilLibre('turbo-copia', ['turbo'])).toBe('turbo-copia')
+  expect(orqModelosParse(JSON.stringify({ ...OM_JSON, perfil: { activo: 'barato', modificado: true } }))!.perfil).toEqual({ activo: 'barato', modificado: true })
+  expect(orqModelosParse(JSON.stringify({ ...OM_JSON, perfil: { activo: null } }))!.perfil).toEqual({ activo: null, modificado: false })
+  expect(orqModelosParse(JSON.stringify(OM_JSON))!.perfil).toBeUndefined()
+})
+
+test('PERFILES de orq: arriba de los tipos, fábrica y míos como chips, el activo con ● y su descripción', async ($, on) => {
+  const { m, asked, hasta, texto, clock } = await omSession($, on)
+  await enModelos(m, hasta)
+  const text = await texto()
+  expect(lecturas(asked, 'perfiles')).toBeGreaterThanOrEqual(1)
+  expect(text.indexOf('op-perfiles')).toBeLessThan(text.indexOf('om-list'))
+  for (const s of ['◈ PERFIL · turbo', 'FÁBRICA', ' · 3', 'MÍOS', ' · 1', '● turbo', 'Lo más rápido.', '+ guardar como…', '⧉ duplicar', '✕ borrar']) expect(text).toContain(s)
+  for (const k of ['op-p-turbo', 'op-p-barato', 'op-p-solo-claude', 'op-p-mio', 'op-del-mio', 'op-save', 'op-dup']) expect(await m.find({ key: k })).toBeDefined()
+  // Los de fábrica no se borran.
+  expect(await m.find({ key: 'op-del-turbo' })).toBeUndefined()
+  expect(text).not.toContain('(modificado)')
+  expect(text).not.toContain('● barato')
+  // Con la pestaña a la vista y sin tocar nada, no se vuelve a preguntar a orq.
+  const antes = [lecturas(asked, 'perfiles'), lecturas(asked, 'modelos')]
+  await clock.advance(5000)
+  expect([lecturas(asked, 'perfiles'), lecturas(asked, 'modelos')]).toEqual(antes)
+})
+
+test('PERFILES de orq: "(modificado)" sale de orq modelos --json y tocar el activo lo vuelve a usar', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { perfiles: { activo: 'barato', modificado: true } })
+  await enModelos(m, hasta)
+  expect(await texto()).toContain('(modificado)')
+  expect(await texto()).toContain('● barato')
+  await m.press({ key: 'op-p-barato' })
+  await opListo(texto, '✓ usando barato')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'usar', 'barato']])
+  expect(await texto()).not.toContain('(modificado)')
+})
+
+test('PERFILES de orq: cambiar un modelo con un perfil de fábrica activo lo muestra (modificado) al volver a la lista', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await enModelos(m, hasta)
+  const perfilesAntes = lecturas(asked, 'perfiles')
+  await m.press({ key: 'om-t-backend' })
+  await hasta('om-c-claude')
+  await m.press({ key: 'om-c-claude' })
+  await m.press({ key: 'om-m-opus' })
+  await m.press({ key: 'om-e-high' })
+  await hasta('om-list')
+  await opListo(texto, '(modificado)')
+  expect(await texto()).toContain('● turbo')
+  // Alcanza con releer orq modelos --json: trae el perfil activo y si se tocó.
+  expect(lecturas(asked, 'perfiles')).toBe(perfilesAntes)
+})
+
+test('PERFILES de orq: usar corre el argv exacto, relee modelos y perfiles y marca el nuevo activo', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { aviso: 'No pude verificar los modelos: el CPAM no respondió.' })
+  await enModelos(m, hasta)
+  const antes = [lecturas(asked, 'modelos'), lecturas(asked, 'perfiles')]
+  await m.press({ key: 'op-p-solo-claude' })
+  await opListo(texto, '✓ usando solo-claude')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'usar', 'solo-claude']])
+  expect(lecturas(asked, 'modelos')).toBeGreaterThan(antes[0])
+  expect(lecturas(asked, 'perfiles')).toBeGreaterThan(antes[1])
+  const text = await texto()
+  expect(text).toContain('● solo-claude')
+  expect(text).not.toContain('● turbo')
+  expect(text).toContain('⚠ No pude verificar los modelos')
+})
+
+test('PERFILES de orq: + guardar como… pide el nombre, guarda y lo deja activo', async ($, on) => {
+  const { m, asked, hasta, texto, pedidos } = await omSession($, on)
+  await enModelos(m, hasta)
+  await m.press({ key: 'op-save' })
+  await opListo(texto, '✓ guardado como turbo-mio (activo)')
+  expect(pedidos[0].options).toEqual(['turbo-mio', 'Cancelar'])
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'guardar', 'turbo-mio']])
+  const text = await texto()
+  expect(text).toContain('● turbo-mio')
+  expect(text).toContain(' · 2')
+  expect(await m.find({ key: 'op-del-turbo-mio' })).toBeDefined()
+})
+
+test('PERFILES de orq: guardar con Cancelar no corre nada', async ($, on) => {
+  const c = await omSession($, on, { nombre: 'Cancelar' })
+  await enModelos(c.m, c.hasta)
+  await c.m.press({ key: 'op-save' })
+  await new Promise((r) => setTimeout(r, 30))
+  expect(opRuns(c.asked)).toEqual([])
+  expect(await c.texto()).not.toContain('✓')
+})
+
+test('PERFILES de orq: guardar sobre un nombre de fábrica avisa el error de orq y no dice guardado', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { nombre: 'barato' })
+  await enModelos(m, hasta)
+  await m.press({ key: 'op-save' })
+  await opListo(texto, '✗ error de orq (código 3)')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'guardar', 'barato']])
+  const text = await texto()
+  expect(text).toContain('es un perfil de fábrica')
+  expect(text).not.toContain('✓ guardado')
+  expect(text).toContain('● turbo')
+})
+
+test('PERFILES de orq: ⧉ duplicar copia el activo a uno propio sin activarlo', async ($, on) => {
+  const { m, asked, hasta, texto, pedidos } = await omSession($, on)
+  await enModelos(m, hasta)
+  await m.press({ key: 'op-dup' })
+  await opListo(texto, '✓ duplicado: turbo → turbo-copia')
+  expect(pedidos[0].options[0]).toBe('turbo-copia')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'duplicar', 'turbo', 'turbo-copia']])
+  expect(await m.find({ key: 'op-p-turbo-copia' })).toBeDefined()
+  expect(await texto()).toContain('● turbo')
+  expect(await texto()).not.toContain('● turbo-copia')
+})
+
+test('PERFILES de orq: borrar pide un segundo toque; otro botón en el medio cancela la confirmación', async ($, on) => {
+  const { m, asked, hasta, texto, st } = await omSession($, on, { perfiles: { activo: 'mio', mios: ['mio', 'otro'] } })
+  await enModelos(m, hasta)
+  await m.press({ key: 'op-del-otro' })
+  let text = await texto()
+  expect(opRuns(asked)).toEqual([])
+  expect(text).toContain('✕ ¿seguro?')
+  expect(text).toContain('tocá ✕ otra vez para borrar otro')
+  // Tocar el ✕ de otro perfil cambia cuál se confirma, sin borrar nada.
+  await m.press({ key: 'op-del-mio' })
+  expect(opRuns(asked)).toEqual([])
+  expect(await texto()).toContain('tocá ✕ otra vez para borrar mio')
+  // Usar un perfil en el medio cancela: el próximo ✕ vuelve a pedir confirmación.
+  await m.press({ key: 'op-p-barato' })
+  await opListo(texto, '✓ usando barato')
+  await m.press({ key: 'op-del-mio' })
+  expect(opRuns(asked).filter((a) => a[2] === 'borrar')).toEqual([])
+  await m.press({ key: 'op-del-mio' })
+  await opListo(texto, '✓ borrado: mio')
+  expect(opRuns(asked).filter((a) => a[2] === 'borrar')).toEqual([['orq', 'perfiles', 'borrar', 'mio']])
+  expect(st.mios).toEqual(['otro'])
+  text = await texto()
+  expect(await m.find({ key: 'op-p-mio' })).toBeUndefined()
+  expect(text).not.toContain('tocá ✕ otra vez')
+})
+
+test('PERFILES de orq: borrar el activo lo deja sin perfil y sin ⧉ duplicar', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on, { perfiles: { activo: 'mio' } })
+  await enModelos(m, hasta)
+  await m.press({ key: 'op-del-mio' })
+  await m.press({ key: 'op-del-mio' })
+  await opListo(texto, '✓ borrado: mio')
+  const text = await texto()
+  expect(text).toContain('sin perfil')
+  expect(text).toContain('◈ PERFIL · ninguno')
+  expect(text).toContain('ninguno todavía')
+  expect(await m.find({ key: 'op-dup' })).toBeUndefined()
+})
+
+test('PERFILES de orq: si orq perfiles --json no contesta lo dice y la lista de tipos sigue andando', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on, { perfilesRoto: true })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
+  await hasta('om-t-backend')
+  await opListo(texto, '✗ orq perfiles --json no contestó')
+  expect(await m.find({ key: 'op-save' })).toBeUndefined()
+  await m.press({ key: 'om-t-backend' })
+  await hasta('om-c-priv8')
+})
+
 // YOUTUBE con un reproductor simulado: la cola sale de lo que contesta mpv por el socket.
 const YT_TITLES = ['Small Town Kid - When the Feeling Is Gone (Lyric Video)', 'Bronski Beat - Smalltown Boy (Official Video) 🎵🎵', '久石譲 - 人生のメリーゴーランド ハウルの動く城 サウンドトラック', 'corto']
 const ytSession = async ($: any, on: any, props: any, pause = false) => {
@@ -2375,6 +2604,9 @@ for (const [name, props, inner] of [
     const lista = filas(tree, /^om-head-/)
     expect(lista.length).toBe(4)
     for (const r of lista) expect([r.key ?? r.props?.key, ytWidth(r) <= inner]).toEqual([r.key ?? r.props?.key, true])
+    const perfiles = filas(tree, /^op-(bar|fab-\d+|sec-mios|mio-.*)$/)
+    expect(perfiles.length).toBe(5)
+    for (const r of perfiles) expect([r.key ?? r.props?.key, ytWidth(r) <= inner]).toEqual([r.key ?? r.props?.key, true])
     expect(ytWidth(filas(tree, /^flaps$/)[0])).toBeLessThanOrEqual(inner + 4)
     expect(ytWidth(filas(tree, /^orqtabs$/)[0])).toBeLessThanOrEqual(inner + 4)
     await n.press({ key: 'om-t-backend' })
