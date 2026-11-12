@@ -980,6 +980,8 @@ function startFast($: any) {
       frame++
       if (!quiet && !placedOnce && frame % 24 === 0) void openPane($)
       if (quiet || !paneOpen || away) return
+      // La solapa MODELOS no se mueve: sólo se redibuja cuando cambia algo.
+      if (orqView && orqSub === 'modelos') return
       if (orqView) {
         // Con la solapa ORQ a la vista no se dibuja nada de NERV: sólo el estado y, si hay algo animándose, el redibujo.
         if (frame % 8 === 0) void refreshOrq($)
@@ -1334,10 +1336,262 @@ async function probeOrq($: any) {
   $.ui.invalidate('ui.render')
 }
 
-function setOrqView($: any, next: boolean) {
+function setOrqView($: any, next: boolean, sub: 'flujo' | 'modelos' = 'flujo') {
   orqView = orqOn && next
-  if (orqView) void refreshOrq($)
+  orqSub = sub
+  if (orqView && sub === 'flujo') void refreshOrq($)
+  if (orqView && sub === 'modelos') {
+    void refreshOrqModelos($)
+    void refreshModels($)
+  }
   $.ui.invalidate('ui.render')
+}
+
+// ── Solapa MODELOS del orquestador: modelo y effort por tipo de worker ──
+// NERV nunca escribe ~/.local/share/orq/modelos.json: lee con `orq modelos --json` y guarda con
+// `orq modelos set|reset`. El catálogo de cuentas es el mismo del CPAM de la pestaña MODELOS.
+export type OrqMdlCfg = { modelo: string; effort: string; origen: 'tipo' | 'default' | 'ninguno' }
+export type OrqModelos = { tipos: string[]; efforts: string[]; aliases: string[]; config: Record<string, OrqMdlCfg> }
+const ORQ_EFFORTS = ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
+const ORQ_ALIASES = ['opus', 'sonnet', 'haiku', 'fable']
+// Con más modelos que esto en una cuenta aparece el filtro.
+const OM_FILTRO = 12
+export const orqModelosParse = (raw: string): OrqModelos | undefined => {
+  let j: any
+  try {
+    j = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (!j || typeof j !== 'object' || !Array.isArray(j.tipos)) return undefined
+  const strs = (v: any, def: string[]) => (Array.isArray(v) && v.length ? v.filter((x: any) => typeof x === 'string' && x) : def)
+  const config: Record<string, OrqMdlCfg> = {}
+  for (const [k, v] of Object.entries((j.config && typeof j.config === 'object' ? j.config : {}) as Record<string, any>)) {
+    if (!v || typeof v !== 'object') continue
+    config[k] = { modelo: typeof v.modelo === 'string' ? v.modelo : '', effort: typeof v.effort === 'string' ? v.effort : '', origen: v.origen === 'tipo' || v.origen === 'default' ? v.origen : 'ninguno' }
+  }
+  return { tipos: strs(j.tipos, []).filter((x) => x !== '*'), efforts: strs(j.efforts, ORQ_EFFORTS), aliases: strs(j.aliases, ORQ_ALIASES), config }
+}
+export const orqModelosSet = (tipo: string, modelo: string, effort: string) => ['orq', 'modelos', 'set', tipo, '--modelo', modelo, '--effort', effort]
+// Las cuentas del CPAM son los grupos con prefijo: un id sin "/" orq lo corre con el plan de Claude.
+export const orqMdlCuentas = (ids: readonly string[], emails: Record<string, string> = {}) => mdlGroups(ids, emails).filter((g) => g.prefix)
+export const orqMdlOrigen = (o?: string) => (o === 'tipo' ? 'propio' : o === 'default' ? 'default' : 'ninguno')
+export const orqMdlEfectivo = (c?: OrqMdlCfg) => `${c?.modelo || 'el de claude'} · ${c?.effort || 'auto'}`
+// Primera línea de lo que dijo orq al fallar, para el aviso.
+export const orqMdlError = (r?: { exitCode?: number; stderr?: string; stdout?: string }) => {
+  let msg = String(r?.stderr || '').trim().split('\n')[0] || ''
+  if (!msg)
+    try {
+      msg = String(JSON.parse(String(r?.stdout || ''))?.error || '')
+    } catch {}
+  return `✗ error de orq (código ${r?.exitCode ?? '?'})${msg ? ': ' + msg : ''}`
+}
+
+let orqSub: 'flujo' | 'modelos' = 'flujo'
+let om: OrqModelos | undefined
+let omErr = ''
+let omBusy = false
+let omAgain = false
+// Dónde está el selector: sin tipo es la lista; con tipo, paso cuenta → modelo → effort.
+let omTipo = ''
+let omCuenta = ''
+let omModelo = ''
+let omQuery = ''
+let omNota = ''
+
+async function refreshOrqModelos($: any) {
+  // Si ya hay una lectura en vuelo (p. ej. la de entrar a la solapa) y llega un guardado, se relee al terminar.
+  if (omBusy) return void (omAgain = true)
+  omBusy = true
+  const r = await $.process.run(['orq', 'modelos', '--json'], { timeoutMs: 5000 }).catch(() => undefined)
+  omBusy = false
+  if (omAgain) {
+    omAgain = false
+    return refreshOrqModelos($)
+  }
+  const p = r?.exitCode === 0 ? orqModelosParse(String(r.stdout)) : undefined
+  if (p) om = p
+  omErr = p ? '' : 'orq modelos --json no contestó'
+  $.ui.invalidate('ui.render')
+}
+
+// Corre set/reset y vuelve a la lista con el aviso (✓ o el error de orq).
+async function orqModelosRun($: any, argv: string[], ok: string) {
+  omNota = '… guardando'
+  $.ui.invalidate('ui.render')
+  const r = await $.process.run(argv, { timeoutMs: 5000 }).catch((err: any) => ({ exitCode: undefined, stderr: String(err?.message || err), stdout: '' }))
+  omNota = r?.exitCode === 0 ? ok : orqMdlError(r)
+  omTipo = omCuenta = omModelo = omQuery = ''
+  await refreshOrqModelos($)
+}
+
+function drawOrqModelos($: any, e: any, h: any) {
+  const { Box, Button, Input } = $.ui.resolve(e)
+  const { t, span, card, chip, w } = h
+  const out: any[] = []
+  const inval = () => $.ui.invalidate('ui.render')
+  const WIBOND = () => t([span('⚠ usa la cuenta de TRABAJO (Wibond)', C.red, { bold: true })])
+  const nota = () => (omNota ? [t([span(omNota, omNota.startsWith('✓') ? C.lime : omNota.startsWith('✗') ? C.red : C.muted, { bold: !omNota.startsWith('…') })], undefined, { wrap: 'wrap' })] : [])
+  if (!om) {
+    out.push(card('om-head', '◈ MODELOS · ORQ', C.purple, [t([span(omErr ? '✗ ' + omErr : 'leyendo orq modelos…', omErr ? C.red : C.muted)])]))
+    return out
+  }
+  const cfg = (tipo: string) => om!.config[tipo]
+  if (!omTipo) {
+    const fila = (tipo: string, label: string) => {
+      const c = cfg(tipo)
+      const origen = orqMdlOrigen(c?.origen)
+      const wib = mdlSplit(c?.modelo || '').prefix === 'wibond'
+      return Box({
+        key: 'om-row-' + tipo,
+        flexDirection: 'column',
+        children: [
+          Box({
+            key: 'om-head-' + tipo,
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            children: [
+              Button({ key: 'om-t-' + tipo, label: '▸ ' + label, plain: true, onPress: () => ((omTipo = tipo), (omCuenta = omModelo = omQuery = omNota = ''), inval()) }),
+              t([span(origen, origen === 'propio' ? C.lime : origen === 'default' ? C.cyan : C.dim)]),
+            ],
+          }),
+          t([span('  ' + (wib ? '⚠ ' : '') + clip(orqMdlEfectivo(c), w - 4), wib ? C.red : origen === 'ninguno' ? C.dim : C.text)]),
+        ],
+      })
+    }
+    out.push(
+      card('om-list', '◈ MODELOS · ORQ', C.purple, [
+        t([span('modelo y effort de cada tipo de worker', C.muted)], undefined, { wrap: 'wrap' }),
+        ...nota(),
+        fila('*', '* default para todos'),
+        ...om.tipos.map((tp) => fila(tp, tp)),
+        ...(om.tipos.length ? [] : [t([span('orq no informó tipos de worker', C.dim)])]),
+        ...(omErr ? [t([span('✗ ' + omErr, C.red)])] : []),
+      ]),
+    )
+    return out
+  }
+  // Pantalla de un tipo: arriba lo que tiene hoy, volver y (si tiene config propia) volver al default.
+  const c = cfg(omTipo)
+  const nombre = omTipo === '*' ? 'default para todos' : omTipo
+  const atras = () => {
+    if (omModelo) omModelo = ''
+    else if (omCuenta) (omCuenta = ''), (omQuery = '')
+    else omTipo = ''
+    inval()
+  }
+  const paso = omModelo ? 'paso 3 · effort' : omCuenta ? 'paso 2 · modelo' : 'paso 1 · cuenta'
+  out.push(
+    card('om-tipo', `◈ ${clip(nombre, w - 20)} · ${paso}`, C.purple, [
+      t([span('hoy ', C.muted), span(clip(orqMdlEfectivo(c), w - 16), C.text), span(' (' + orqMdlOrigen(c?.origen) + ')', C.dim)]),
+      ...(mdlSplit(c?.modelo || '').prefix === 'wibond' ? [WIBOND()] : []),
+      Box({
+        key: 'om-nav',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: [
+          chip('om-back', '‹ volver', true, C.tabBg, atras),
+          ...(c?.origen === 'tipo' ? [chip('om-reset', omTipo === '*' ? '↺ sacar el default' : '↺ volver al default', true, C.chipDim, () => void orqModelosRun($, ['orq', 'modelos', 'reset', omTipo], `✓ ${nombre}: vuelve al default`))] : []),
+        ],
+      }),
+    ]),
+  )
+  const cuentas = orqMdlCuentas(mdl.ids, mdl.emails)
+  const colorDe = (prefix: string) => (prefix === 'wibond' ? C.red : prefix === 'nan' ? C.lime : prefix === 'ds' ? C.amber : prefix === 'refuseless' ? C.pink : prefix === 'mw' ? C.orange : /^ag/.test(prefix) ? C.cyan : C.violet)
+  if (!omCuenta) {
+    const rows: any[] = [
+      Box({
+        key: 'om-c-row-claude',
+        flexDirection: 'column',
+        children: [Button({ key: 'om-c-claude', label: '▸ Claude (tu plan)', plain: true, onPress: () => ((omCuenta = 'claude'), inval()) }), t([span('  ' + clip(om.aliases.join(' · '), w - 2), C.dim)])],
+      }),
+    ]
+    for (const g of cuentas)
+      rows.push(
+        Box({
+          key: 'om-c-row-' + g.prefix,
+          flexDirection: 'column',
+          children: [
+            Box({
+              key: 'om-c-head-' + g.prefix,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              children: [
+                Button({ key: 'om-c-' + g.prefix, label: '▸ ' + clip(g.label, Math.max(6, w - `${g.prefix}/ ${g.models.length}`.length - 4)), plain: true, onPress: () => ((omCuenta = g.prefix), (omQuery = ''), inval()) }),
+                t([span(`${g.prefix}/ ${g.models.length}`, colorDe(g.prefix))]),
+              ],
+            }),
+            ...(g.prefix === 'wibond' ? [WIBOND()] : []),
+          ],
+        }),
+      )
+    if (!cuentas.length) rows.push(t([span(mdl.err ? '✖ ' + mdl.err : mdl.busy ? 'leyendo el CPAM…' : 'el CPAM no tiene cuentas con prefijo', mdl.err ? C.red : C.dim)], undefined, { wrap: 'wrap' }))
+    out.push(card('om-cuentas', '¿con qué cuenta?', C.violet, rows))
+    return out
+  }
+  const grupo = cuentas.find((g) => g.prefix === omCuenta)
+  const etiqueta = omCuenta === 'claude' ? 'Claude (tu plan)' : grupo?.label || omCuenta
+  const color = omCuenta === 'claude' ? C.orange : colorDe(omCuenta)
+  if (!omModelo) {
+    const todos = omCuenta === 'claude' ? om.aliases : grupo?.models || []
+    const filtro = todos.length > OM_FILTRO
+    const lista = filtro && omQuery ? (mdlFilter([{ key: omCuenta, label: etiqueta, prefix: omCuenta, models: todos }], omQuery)[0]?.models ?? []) : todos
+    const rows: any[] = [...(omCuenta === 'wibond' ? [WIBOND()] : [])]
+    if (filtro)
+      rows.push(
+        Box({
+          key: 'om-q-field',
+          borderStyle: 'round',
+          borderColor: C.violet,
+          paddingX: 1,
+          flexDirection: 'row',
+          children: [
+            t([span('⌕ ', C.violet, { bold: true })]),
+            Input({ key: 'om-q', placeholder: 'filtrar modelos…', value: omQuery, submitLabel: 'Enter', onInput: (v: string) => ((omQuery = v), inval()), onSubmit: (v: string) => ((omQuery = v), inval()) }),
+          ],
+        }),
+      )
+    rows.push(
+      Box({
+        key: 'om-m-list',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: lista.map((id) => {
+          const actual = c?.modelo === id
+          return Box({
+            key: 'om-mbox-' + id,
+            children: [Button({ key: 'om-m-' + id, label: (actual ? '◆ ' : '') + mdlSplit(id).name + (MDL_BROKEN[id] ? ' ⚠' : ''), plain: true, dimColor: !!mdlDim(id) && !actual, onPress: () => ((omModelo = id), inval()) })],
+          })
+        }),
+      }),
+    )
+    if (!todos.length) rows.push(t([span('esta cuenta no tiene modelos', C.dim)]))
+    else if (!lista.length) rows.push(t([span(`nada coincide con "${omQuery}"`, C.dim)]))
+    out.push(card('om-modelos', clip(etiqueta, w - 4), omCuenta === 'wibond' ? C.red : color, rows))
+    return out
+  }
+  const dim = mdlDim(omModelo)
+  out.push(
+    card('om-efforts', 'effort', color, [
+      t([span('▶ ', C.lime, { bold: true }), span(clip(omModelo, w - 4), C.text, { bold: true })]),
+      ...(mdlSplit(omModelo).prefix === 'wibond' ? [WIBOND()] : []),
+      ...(dim ? [t([span(`⚠ ${dim === 'no chat' ? 'no es un modelo de chat' : 'antes falló en Claude Code: ' + dim}`, C.amber)])] : []),
+      Box({
+        key: 'om-e-list',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 1,
+        children: om.efforts.map((lvl) =>
+          chip('om-e-' + lvl, (c?.effort === lvl && c?.modelo === omModelo ? '◆ ' : '') + lvl, true, lvl === 'auto' ? C.chipDim : C.tabBg, () =>
+            void orqModelosRun($, orqModelosSet(omTipo, omModelo, lvl), `✓ guardado: ${nombre} → ${omModelo} · ${lvl}`),
+          ),
+        ),
+      }),
+    ]),
+  )
+  return out
 }
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -1521,8 +1775,17 @@ function draw($: any, e: any) {
     Box({ key: 'box-' + key, paddingX: 1, backgroundColor: active ? bg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active, onPress })] })
 
   const orqFlap = (id: string, label: string, on: boolean) =>
-    Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id === 'orq') })] })
-  const flaps = orqOn ? [Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView)] }), t([span('─'.repeat(Math.max(0, cols)), C.dim)])] : []
+    Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id !== 'nerv', id === 'modelos' ? 'modelos' : 'flujo') })] })
+  const flaps = orqOn
+    ? [
+        Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView && orqSub === 'flujo'), orqFlap('modelos', 'MODELOS', orqView && orqSub === 'modelos')] }),
+        t([span('─'.repeat(Math.max(0, cols)), C.dim)]),
+      ]
+    : []
+  if (orqView && orqSub === 'modelos') {
+    g0nShown = -1
+    return Box({ flexDirection: 'column', children: [...flaps, Box({ key: 'om', flexDirection: 'column', children: drawOrqModelos($, e, { t, span, card, chip, w }) })] })
+  }
   if (orqView) {
     // El cartel de ORQ usa el reloj y el contador de cuadros del g0n: sólo hay uno de los dos a la vista.
     const banner: any[] = []

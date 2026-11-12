@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1949,6 +1949,7 @@ test('en cualquier sesión, si orq contesta aparecen las solapas: arranca en NER
   await clock.advance(3000)
   expect(estados()).toBe(1)
   expect(await m.find({ key: 'flap-orq' })).toBeDefined()
+  expect(await m.find({ key: 'flap-modelos' })).toBeDefined()
   expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
   let text = JSON.stringify(await m.drawn())
   expect(text).toContain('◆ NERV')
@@ -1983,7 +1984,7 @@ const orqApagado = async ($: any, on: any, env: Record<string, string>, out: str
   const { m, clock, asked } = await orqSession($, on, env, () => out)
   await clock.advance(3000)
   await $.command.run({ command: 'nerv', args: 'orq' })
-  for (const k of ['flaps', 'flap-orq', 'orq-flow']) expect(await m.find({ key: k })).toBeUndefined()
+  for (const k of ['flaps', 'flap-orq', 'flap-modelos', 'orq-flow']) expect(await m.find({ key: k })).toBeUndefined()
   const text = JSON.stringify(await m.drawn())
   expect(text).not.toContain('◆ orquestador')
   expect(text).not.toContain('assets/orq')
@@ -1998,6 +1999,203 @@ test('sin orq que conteste no hay solapas ni flujo y /nerv orq no hace nada', as
 test('con NERV_ORQ=0 no hay solapas ni se le pregunta a orq', async ($, on) => {
   const asked = await orqApagado($, on, { NERV_ORQ: '0' }, JSON.stringify(ORQ_JSON))
   expect(asked.some((a: string[]) => a[0] === 'orq')).toBe(false)
+})
+
+// MODELOS del orquestador con un orq simulado: `orq modelos --json` según el contrato y set/reset con el código que se pida.
+const OM_JSON = {
+  tipos: ['backend', 'coding', 'frontend'],
+  efforts: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+  config: {
+    '*': { modelo: 'sonnet', effort: 'medium', origen: 'tipo' },
+    backend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    coding: { modelo: 'sonnet', effort: 'medium', origen: 'default' },
+    frontend: { modelo: 'wibond/claude-opus-5-5', effort: '', origen: 'tipo' },
+  },
+  aliases: ['opus', 'sonnet', 'haiku', 'fable'],
+}
+const OM_IDS = ['priv8/claude-opus-5-5', 'priv8/claude-sonnet-5-5', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
+const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string; json?: any } = {}) => {
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  const clock = mock.clock(on)
+  const asked: string[][] = []
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('fs.read', async () => ({ value: '' }))
+  on('process.run', async (_$: any, e: any) => {
+    const a: string[] = e.argv
+    asked.push(a)
+    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
+    if (a[0] === 'sh' && a[2]?.includes('/v1/models')) return ok(JSON.stringify({ data: OM_IDS.map((id) => ({ id })) }))
+    if (a[0] === 'orq' && a[1] === 'estado') return ok(JSON.stringify(ORQ_JSON))
+    if (a.join(' ') === 'orq modelos --json') return ok(JSON.stringify(opts.json ?? OM_JSON))
+    if (a[0] === 'orq' && a[1] === 'modelos' && (a[2] === 'set' || a[2] === 'reset'))
+      return opts.code ? { value: { exitCode: opts.code, stdout: '', stderr: opts.stderr || '' } } : ok(JSON.stringify({ ok: true, tipo: a[3] }))
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await clock.advance(3000)
+  const hasta = async (key: string) => {
+    for (let i = 0; i < 50 && !(await m.find({ key })); i++) await new Promise((r) => setTimeout(r, 10))
+    expect(await m.find({ key })).toBeDefined()
+  }
+  const texto = async () => JSON.stringify(await m.drawn())
+  return { m, asked, hasta, texto }
+}
+const omRuns = (asked: string[][], verbo: string) => asked.filter((a) => a[0] === 'orq' && a[1] === 'modelos' && a[2] === verbo)
+
+test('orqModelosParse lee el contrato y completa lo que falta; orqMdlCuentas deja sólo las cuentas con prefijo', () => {
+  const p = orqModelosParse(JSON.stringify(OM_JSON))!
+  expect(p.tipos).toEqual(['backend', 'coding', 'frontend'])
+  expect(p.config.backend).toEqual({ modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' })
+  expect(p.config.frontend.effort).toBe('')
+  const flaco = orqModelosParse(JSON.stringify({ tipos: ['a', '*'], config: { a: { origen: 'raro' } } }))!
+  expect(flaco.tipos).toEqual(['a'])
+  expect(flaco.efforts).toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+  expect(flaco.aliases).toEqual(['opus', 'sonnet', 'haiku', 'fable'])
+  expect(flaco.config.a).toEqual({ modelo: '', effort: '', origen: 'ninguno' })
+  expect(orqModelosParse('nada')).toBeUndefined()
+  expect(orqModelosParse('{"config":{}}')).toBeUndefined()
+  expect(orqModelosSet('*', 'opus', 'auto')).toEqual(['orq', 'modelos', 'set', '*', '--modelo', 'opus', '--effort', 'auto'])
+  expect(orqMdlCuentas(['nan/a', 'claude-sonnet-5', 'wibond/x']).map((g) => g.prefix)).toEqual(['nan', 'wibond'])
+  expect(orqMdlError({ exitCode: 3, stderr: 'effort inválido: mucho\nmás' })).toBe('✗ error de orq (código 3): effort inválido: mucho')
+  expect(orqMdlError({ exitCode: 1, stdout: '{"ok":false,"error":"no hay archivo"}' })).toBe('✗ error de orq (código 1): no hay archivo')
+  expect(orqMdlError({ exitCode: 2 })).toBe('✗ error de orq (código 2)')
+})
+
+test('MODELOS de orq: la lista muestra cada tipo con su modelo, effort y de dónde sale', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-backend')
+  expect(asked.some((a) => a.join(' ') === 'orq modelos --json')).toBe(true)
+  const text = await texto()
+  expect(text).toContain('◆ MODELOS')
+  expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
+  expect(await m.find({ key: 'tab-magi' })).toBeUndefined()
+  expect(text).toContain('* default para todos')
+  expect(text.indexOf('om-t-*')).toBeLessThan(text.indexOf('om-t-backend'))
+  for (const s of ['priv8/claude-opus-5-5 · high', 'sonnet · medium', 'propio', 'default', '⚠ wibond/claude-opus-5-5 · auto']) expect(text).toContain(s)
+  // Volver a ORQ deja ver el flujo de nuevo.
+  await m.press({ key: 'flap-orq' })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  expect(await m.find({ key: 'om-list' })).toBeUndefined()
+})
+
+test('MODELOS de orq: cuenta → modelo → effort termina en el argv exacto de orq modelos set y vuelve a la lista', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-coding')
+  await m.press({ key: 'om-t-coding' })
+  await hasta('om-c-priv8')
+  let text = await texto()
+  expect(text).toContain('paso 1 · cuenta')
+  expect(text).toContain('Claude (tu plan)')
+  expect(text).toContain('opus · sonnet · haiku · fable')
+  for (const k of ['om-c-claude', 'om-c-wibond', 'om-c-ag3', 'om-c-nan']) expect(await m.find({ key: k })).toBeDefined()
+  // Los ids sin prefijo no son una cuenta del CPAM: orq los correría con el plan de Claude.
+  expect(text).not.toContain('om-c-claude-sonnet')
+  // coding sale del default: no hay nada propio que borrar.
+  expect(await m.find({ key: 'om-reset' })).toBeUndefined()
+  await m.press({ key: 'om-c-priv8' })
+  text = await texto()
+  expect(text).toContain('paso 2 · modelo')
+  expect(await m.find({ key: 'om-q' })).toBeUndefined()
+  await m.press({ key: 'om-m-priv8/claude-sonnet-5-5' })
+  text = await texto()
+  expect(text).toContain('paso 3 · effort')
+  for (const lvl of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) expect(await m.find({ key: 'om-e-' + lvl })).toBeDefined()
+  // ‹ volver retrocede un paso por vez.
+  await m.press({ key: 'om-back' })
+  expect(await texto()).toContain('paso 2 · modelo')
+  await m.press({ key: 'om-m-priv8/claude-sonnet-5-5' })
+  await m.press({ key: 'om-e-xhigh' })
+  await hasta('om-list')
+  expect(omRuns(asked, 'set')).toEqual([['orq', 'modelos', 'set', 'coding', '--modelo', 'priv8/claude-sonnet-5-5', '--effort', 'xhigh']])
+  text = await texto()
+  expect(text).toContain('✓ guardado: coding → priv8/claude-sonnet-5-5 · xhigh')
+  // Después de guardar relee lo que quedó.
+  expect(asked.filter((a) => a.join(' ') === 'orq modelos --json').length).toBeGreaterThanOrEqual(2)
+  // Con el plan de Claude: los alias, y "* default para todos" guarda en "*".
+  await m.press({ key: 'om-t-*' })
+  await m.press({ key: 'om-c-claude' })
+  for (const a of ['opus', 'sonnet', 'haiku', 'fable']) expect(await m.find({ key: 'om-m-' + a })).toBeDefined()
+  await m.press({ key: 'om-m-opus' })
+  await m.press({ key: 'om-e-auto' })
+  await hasta('om-list')
+  expect(omRuns(asked, 'set')[1]).toEqual(['orq', 'modelos', 'set', '*', '--modelo', 'opus', '--effort', 'auto'])
+})
+
+test('MODELOS de orq: una cuenta con muchos modelos trae el filtro y ‹ volver desde la cuenta vuelve a la lista', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on)
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-backend')
+  await m.press({ key: 'om-t-backend' })
+  await hasta('om-c-nan')
+  await m.press({ key: 'om-c-nan' })
+  expect(await m.find({ key: 'om-q' })).toBeDefined()
+  expect(await m.find({ key: 'om-m-nan/m12' })).toBeDefined()
+  await m.press({ key: 'om-back' })
+  expect(await texto()).toContain('paso 1 · cuenta')
+  await m.press({ key: 'om-back' })
+  expect(await m.find({ key: 'om-list' })).toBeDefined()
+})
+
+test('MODELOS de orq: un tipo con config propia tiene "volver al default", que corre orq modelos reset', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-backend')
+  await m.press({ key: 'om-t-backend' })
+  expect(await texto()).toContain('volver al default')
+  await m.press({ key: 'om-reset' })
+  await hasta('om-list')
+  expect(omRuns(asked, 'reset')).toEqual([['orq', 'modelos', 'reset', 'backend']])
+  expect(omRuns(asked, 'set')).toEqual([])
+  expect(await texto()).toContain('✓ backend: vuelve al default')
+})
+
+test('MODELOS de orq: si orq sale con código distinto de 0 avisa el error y no dice guardado', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on, { code: 3, stderr: 'effort inválido' })
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-backend')
+  await m.press({ key: 'om-t-backend' })
+  await hasta('om-c-ag3')
+  await m.press({ key: 'om-c-ag3' })
+  await m.press({ key: 'om-m-ag3/gemini-3.8-flash-high' })
+  await m.press({ key: 'om-e-max' })
+  await hasta('om-list')
+  const text = await texto()
+  expect(text).toContain('✗ error de orq (código 3): effort inválido')
+  expect(text).not.toContain('✓ guardado')
+})
+
+test('MODELOS de orq: la cuenta wibond avisa en rojo que es la de TRABAJO en cada paso', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on)
+  await m.press({ key: 'flap-modelos' })
+  await hasta('om-t-coding')
+  await m.press({ key: 'om-t-coding' })
+  await hasta('om-c-wibond')
+  let text = await texto()
+  expect(text).toContain('⚠ usa la cuenta de TRABAJO (Wibond)')
+  expect(text).toContain('Wibond (trabajo)')
+  await m.press({ key: 'om-c-wibond' })
+  expect(await texto()).toContain('cuenta de TRABAJO')
+  await m.press({ key: 'om-m-wibond/claude-opus-5-5' })
+  text = await texto()
+  expect(text).toContain('paso 3 · effort')
+  expect(text).toContain('cuenta de TRABAJO')
+  // En otra cuenta el aviso no aparece.
+  await m.press({ key: 'om-back' })
+  await m.press({ key: 'om-back' })
+  await m.press({ key: 'om-c-priv8' })
+  expect(await texto()).not.toContain('cuenta de TRABAJO')
+})
+
+test('MODELOS de orq: si orq modelos --json no contesta lo dice en vez de quedarse en blanco', async ($, on) => {
+  const { m, texto } = await omSession($, on, { json: 'no es el contrato' })
+  await m.press({ key: 'flap-modelos' })
+  for (let i = 0; i < 50 && !(await texto()).includes('no contestó'); i++) await new Promise((r) => setTimeout(r, 10))
+  expect(await texto()).toContain('✗ orq modelos --json no contestó')
 })
 
 // YOUTUBE con un reproductor simulado: la cola sale de lo que contesta mpv por el socket.
@@ -2095,6 +2293,30 @@ for (const [name, props, inner] of [
     const chips = ytFind(tree, (x) => x === 'yt-chips')[0]
     expect(chips.props.columnGap).toBe(1)
     expect(chips.props.flexWrap).toBe('wrap')
+  })
+
+for (const [name, props, inner] of [
+  ['44 columnas', PANE_PROPS, 39],
+  ['angosto', { ...PANE_PROPS, bodyColumns: 34, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } }, 30],
+] as [string, any, number][])
+  test(`MODELOS de orq a ${name}: las filas de tipos, cuentas y solapas entran en el ancho`, async ($, on) => {
+    const { m } = await omSession($, on)
+    await m.unmount()
+    const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
+    await n.press({ key: 'flap-modelos' })
+    for (let i = 0; i < 50 && !(await n.find({ key: 'om-t-backend' })); i++) await new Promise((r) => setTimeout(r, 10))
+    const filas = (tree: any, re: RegExp) => ytFind(tree, (k) => re.test(k))
+    let tree = await n.drawn()
+    const lista = filas(tree, /^om-head-/)
+    expect(lista.length).toBe(4)
+    for (const r of lista) expect([r.key ?? r.props?.key, ytWidth(r) <= inner]).toEqual([r.key ?? r.props?.key, true])
+    expect(ytWidth(filas(tree, /^flaps$/)[0])).toBeLessThanOrEqual(inner + 4)
+    await n.press({ key: 'om-t-backend' })
+    for (let i = 0; i < 50 && !(await n.find({ key: 'om-c-wibond' })); i++) await new Promise((r) => setTimeout(r, 10))
+    tree = await n.drawn()
+    const cuentas = filas(tree, /^om-c-head-/)
+    expect(cuentas.length).toBe(4)
+    for (const r of cuentas) expect([r.key ?? r.props?.key, ytWidth(r) <= inner]).toEqual([r.key ?? r.props?.key, true])
   })
 
 test('YOUTUBE: cada botón de la tarjeta manda a mpv lo que dice', async ($, on) => {
