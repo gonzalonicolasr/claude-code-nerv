@@ -1932,6 +1932,42 @@ test('la solapa NERV muestra NERV entero sin flujo ni pedidos de estado, y ORQ v
   expect(await m.find({ key: 'orq-flow' })).toBeDefined()
 })
 
+test('solapas: arriba sólo NERV | ORQ; adentro de ORQ, FLUJO | MODELOS con FLUJO siempre por defecto', async ($, on) => {
+  const { m, asked } = await orqSession($, on, { ORQ_ROL: 'orquestador', ORQ_ESTADO_CMD: '/x/estado --json' }, () => JSON.stringify(ORQ_JSON))
+  const fila = (tree: any, key: string) => JSON.stringify(ytFind(tree, (k) => k === key)[0] ?? null)
+  let tree = await m.drawn()
+  // Arriba: dos solapas, ORQ marcada; MODELOS ya no está ahí.
+  expect(await m.find({ key: 'flap-nerv' })).toBeDefined()
+  expect(await m.find({ key: 'flap-modelos' })).toBeUndefined()
+  expect(fila(tree, 'flaps')).toContain('◆ ORQ')
+  expect(fila(tree, 'flaps')).not.toContain('MODELOS')
+  // Adentro: FLUJO (marcada, la de arranque) y MODELOS, numeradas como las de NERV.
+  expect(fila(tree, 'orqtabs')).toContain('◆ FLUJO')
+  expect(fila(tree, 'orqtabs')).toContain('MODELOS')
+  expect(fila(tree, 'orqtabs')).not.toContain('◆ MODELOS')
+  expect((await m.find({ key: 'orqtab-flujo' })).props.hotkey).toBe('1')
+  expect((await m.find({ key: 'orqtab-modelos' })).props.hotkey).toBe('2')
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  await m.press({ key: 'orqtab-modelos' })
+  tree = await m.drawn()
+  expect(fila(tree, 'orqtabs')).toContain('◆ MODELOS')
+  expect(fila(tree, 'flaps')).toContain('◆ ORQ')
+  expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
+  expect(asked.some((a) => a.join(' ') === 'orq modelos --json')).toBe(true)
+  await m.press({ key: 'orqtab-flujo' })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  // Salir a NERV y volver a ORQ abre siempre FLUJO, aunque la última vez quedó en MODELOS.
+  await m.press({ key: 'orqtab-modelos' })
+  await m.press({ key: 'flap-nerv' })
+  expect(await m.find({ key: 'orqtabs' })).toBeUndefined()
+  await m.press({ key: 'flap-orq' })
+  expect(fila(await m.drawn(), 'orqtabs')).toContain('◆ FLUJO')
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+  await m.press({ key: 'orqtab-modelos' })
+  await $.command.run({ command: 'nerv', args: 'orq' })
+  expect(await m.find({ key: 'orq-flow' })).toBeDefined()
+})
+
 test('en una superficie sin imagen la solapa ORQ muestra el flujo sin cartel', async ($, on) => {
   const { m } = await orqSession($, on, { ORQ_ROL: 'orquestador', ORQ_ESTADO_CMD: '/x/estado --json' }, () => JSON.stringify(ORQ_JSON))
   await m.unmount()
@@ -1949,7 +1985,9 @@ test('en cualquier sesión, si orq contesta aparecen las solapas: arranca en NER
   await clock.advance(3000)
   expect(estados()).toBe(1)
   expect(await m.find({ key: 'flap-orq' })).toBeDefined()
-  expect(await m.find({ key: 'flap-modelos' })).toBeDefined()
+  // Arriba sólo NERV | ORQ: MODELOS vive adentro de ORQ.
+  expect(await m.find({ key: 'flap-modelos' })).toBeUndefined()
+  expect(await m.find({ key: 'orqtabs' })).toBeUndefined()
   expect(await m.find({ key: 'orq-flow' })).toBeUndefined()
   let text = JSON.stringify(await m.drawn())
   expect(text).toContain('◆ NERV')
@@ -2003,7 +2041,7 @@ const orqApagado = async ($: any, on: any, env: Record<string, string>, out: str
   const { m, clock, asked } = await orqSession($, on, env, () => out)
   await clock.advance(3000)
   await $.command.run({ command: 'nerv', args: 'orq' })
-  for (const k of ['flaps', 'flap-orq', 'flap-modelos', 'orq-flow']) expect(await m.find({ key: k })).toBeUndefined()
+  for (const k of ['flaps', 'flap-orq', 'orqtabs', 'orq-flow']) expect(await m.find({ key: k })).toBeUndefined()
   const text = JSON.stringify(await m.drawn())
   expect(text).not.toContain('◆ orquestador')
   expect(text).not.toContain('assets/orq')
@@ -2085,7 +2123,8 @@ test('orqModelosParse lee el contrato y completa lo que falta; orqMdlCuentas dej
 
 test('MODELOS de orq: la lista muestra cada tipo con su modelo, effort y de dónde sale', async ($, on) => {
   const { m, asked, hasta, texto } = await omSession($, on)
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-backend')
   expect(asked.some((a) => a.join(' ') === 'orq modelos --json')).toBe(true)
   const text = await texto()
@@ -2103,7 +2142,8 @@ test('MODELOS de orq: la lista muestra cada tipo con su modelo, effort y de dón
 
 test('MODELOS de orq: cuenta → modelo → effort termina en el argv exacto de orq modelos set y vuelve a la lista', async ($, on) => {
   const { m, asked, hasta, texto } = await omSession($, on)
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-coding')
   await m.press({ key: 'om-t-coding' })
   await hasta('om-c-priv8')
@@ -2147,7 +2187,8 @@ test('MODELOS de orq: cuenta → modelo → effort termina en el argv exacto de 
 
 test('MODELOS de orq: una cuenta con muchos modelos trae el filtro y ‹ volver desde la cuenta vuelve a la lista', async ($, on) => {
   const { m, hasta, texto } = await omSession($, on)
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-backend')
   await m.press({ key: 'om-t-backend' })
   await hasta('om-c-nan')
@@ -2162,7 +2203,8 @@ test('MODELOS de orq: una cuenta con muchos modelos trae el filtro y ‹ volver 
 
 test('MODELOS de orq: un tipo con config propia tiene "volver al default", que corre orq modelos reset', async ($, on) => {
   const { m, asked, hasta, texto } = await omSession($, on)
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-backend')
   await m.press({ key: 'om-t-backend' })
   expect(await texto()).toContain('volver al default')
@@ -2175,7 +2217,8 @@ test('MODELOS de orq: un tipo con config propia tiene "volver al default", que c
 
 test('MODELOS de orq: si orq sale con código distinto de 0 avisa el error y no dice guardado', async ($, on) => {
   const { m, hasta, texto } = await omSession($, on, { code: 3, stderr: 'effort inválido' })
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-backend')
   await m.press({ key: 'om-t-backend' })
   await hasta('om-c-ag3')
@@ -2190,7 +2233,8 @@ test('MODELOS de orq: si orq sale con código distinto de 0 avisa el error y no 
 
 test('MODELOS de orq: la cuenta wibond avisa en rojo que es la de TRABAJO en cada paso', async ($, on) => {
   const { m, hasta, texto } = await omSession($, on)
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-coding')
   await m.press({ key: 'om-t-coding' })
   await hasta('om-c-wibond')
@@ -2212,7 +2256,8 @@ test('MODELOS de orq: la cuenta wibond avisa en rojo que es la de TRABAJO en cad
 
 test('MODELOS de orq: si orq modelos --json no contesta lo dice en vez de quedarse en blanco', async ($, on) => {
   const { m, texto } = await omSession($, on, { json: 'no es el contrato' })
-  await m.press({ key: 'flap-modelos' })
+  await m.press({ key: 'flap-orq' })
+  await m.press({ key: 'orqtab-modelos' })
   for (let i = 0; i < 50 && !(await texto()).includes('no contestó'); i++) await new Promise((r) => setTimeout(r, 10))
   expect(await texto()).toContain('✗ orq modelos --json no contestó')
 })
@@ -2322,7 +2367,8 @@ for (const [name, props, inner] of [
     const { m } = await omSession($, on)
     await m.unmount()
     const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
-    await n.press({ key: 'flap-modelos' })
+    await n.press({ key: 'flap-orq' })
+  await n.press({ key: 'orqtab-modelos' })
     for (let i = 0; i < 50 && !(await n.find({ key: 'om-t-backend' })); i++) await new Promise((r) => setTimeout(r, 10))
     const filas = (tree: any, re: RegExp) => ytFind(tree, (k) => re.test(k))
     let tree = await n.drawn()
@@ -2330,6 +2376,7 @@ for (const [name, props, inner] of [
     expect(lista.length).toBe(4)
     for (const r of lista) expect([r.key ?? r.props?.key, ytWidth(r) <= inner]).toEqual([r.key ?? r.props?.key, true])
     expect(ytWidth(filas(tree, /^flaps$/)[0])).toBeLessThanOrEqual(inner + 4)
+    expect(ytWidth(filas(tree, /^orqtabs$/)[0])).toBeLessThanOrEqual(inner + 4)
     await n.press({ key: 'om-t-backend' })
     for (let i = 0; i < 50 && !(await n.find({ key: 'om-c-wibond' })); i++) await new Promise((r) => setTimeout(r, 10))
     tree = await n.drawn()

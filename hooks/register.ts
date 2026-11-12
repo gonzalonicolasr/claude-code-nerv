@@ -1775,16 +1775,28 @@ function draw($: any, e: any) {
     Box({ key: 'box-' + key, paddingX: 1, backgroundColor: active ? bg : C.chipDim, children: [Button({ key, label, plain: true, dimColor: !active, onPress })] })
 
   const orqFlap = (id: string, label: string, on: boolean) =>
-    Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id !== 'nerv', id === 'modelos' ? 'modelos' : 'flujo') })] })
+    Box({ key: 'flapbox-' + id, paddingX: 1, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key: 'flap-' + id, label: on ? `◆ ${label}` : label, plain: true, dimColor: !on, onPress: () => setOrqView($, id !== 'nerv') })] })
   const flaps = orqOn
     ? [
-        Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView && orqSub === 'flujo'), orqFlap('modelos', 'MODELOS', orqView && orqSub === 'modelos')] }),
+        Box({ key: 'flaps', flexDirection: 'row', columnGap: 1, children: [orqFlap('nerv', 'NERV', !orqView), orqFlap('orq', 'ORQ', orqView)] }),
         t([span('─'.repeat(Math.max(0, cols)), C.dim)]),
       ]
     : []
+  // Pestañas de adentro de ORQ, con el mismo look que las numeradas de NERV (1: MAGI 2: GIT…).
+  const orqTab = (id: 'flujo' | 'modelos', label: string, hotkey: string) =>
+    Box({
+      key: 'orqtabbox-' + id,
+      width: Math.floor((cols - 1) / 2),
+      justifyContent: 'center',
+      backgroundColor: orqSub === id ? C.tabBg : undefined,
+      children: [Button({ key: 'orqtab-' + id, label: orqSub === id ? `◆ ${label}` : label, hotkey, plain: true, dimColor: orqSub !== id, onPress: () => setOrqView($, true, id) })],
+    })
+  const orqTabs = orqView
+    ? [Box({ key: 'orqtabs', flexDirection: 'row', columnGap: 1, children: [orqTab('flujo', 'FLUJO', '1'), orqTab('modelos', 'MODELOS', '2')] }), t([span('─'.repeat(Math.max(0, cols)), C.dim)])]
+    : []
   if (orqView && orqSub === 'modelos') {
     g0nShown = -1
-    return Box({ flexDirection: 'column', children: [...flaps, Box({ key: 'om', flexDirection: 'column', children: drawOrqModelos($, e, { t, span, card, chip, w }) })] })
+    return Box({ flexDirection: 'column', children: [...flaps, ...orqTabs, Box({ key: 'om', flexDirection: 'column', children: drawOrqModelos($, e, { t, span, card, chip, w }) })] })
   }
   if (orqView) {
     // El cartel de ORQ usa el reloj y el contador de cuadros del g0n: sólo hay uno de los dos a la vista.
@@ -1827,7 +1839,7 @@ function draw($: any, e: any) {
       const press = () => void $.process.run(['orq', 'enfocar', h.nombre], { timeoutMs: 5000 }).catch(() => undefined)
       return Box({ key: 'orq-row-' + h.nombre, flexDirection: 'row', children: [t(runs(row, 0, h.x0)), Button({ key: 'orq-w-' + h.nombre, plain: true, onPress: press, children: runs(row, h.x0, h.x1) }), ...(end(row) > h.x1 ? [t(runs(row, h.x1, end(row)))] : [])] })
     })
-    return Box({ flexDirection: 'column', children: [...flaps, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
+    return Box({ flexDirection: 'column', children: [...flaps, ...orqTabs, ...banner, t([' ']), Box({ key: 'orq-flow', flexDirection: 'column', children: flow })] })
   }
   const out: any[] = [...flaps]
   const alert = battery()
