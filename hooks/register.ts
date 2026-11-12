@@ -1791,10 +1791,17 @@ function draw($: any, e: any) {
     const banner: any[] = []
     g0nShown = -1
     if (Image && e.surface === 'terminal') {
-      const f = g0nFrame()
-      g0nShown = f
+      // En la Herdr app el cartel queda quieto en un cuadro: cambiar de imagen cada 70 ms hacía que
+      // desapareciera un instante mientras la app cargaba la siguiente, y el flujo saltaba.
+      const f = inHerdrApp ? 0 : g0nFrame()
+      g0nShown = inHerdrApp ? -1 : f
       const source = imgSource($, `${$.plugin.root}/assets/orq/${themeId}/${String(f).padStart(2, '0')}.png`)
-      if (source) banner.push(Box({ key: 'orq-banner', children: [Image({ key: 'orq-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] }))
+      // Mientras la imagen carga se reserva su lugar, así el flujo no se mueve cuando aparece.
+      banner.push(
+        source
+          ? Box({ key: 'orq-banner', children: [Image({ key: 'orq-img', source, columns: Math.max(1, cols - 2), rows: 6, alt: ' ' })] })
+          : Box({ key: 'orq-banner', height: 6, children: [t([' '])] }),
+      )
     }
     const tones: Record<OrqTone, string> = { text: C.text, dim: C.dim, line: C.dim, pulse: C.lime, tail: C.violet, orq: C.purple, work: C.amber, ok: ORQ_GREEN, bad: C.red, gray: C.muted, hot: C.lime }
     const { rows, hits } = orqDraw(Math.max(1, cols - 1), orqVista(orqState, orqPropio, working), frame)

@@ -1962,6 +1962,25 @@ test('en cualquier sesión, si orq contesta aparecen las solapas: arranca en NER
   expect(text).toContain('login')
 })
 
+test('en la Herdr app el cartel de ORQ queda quieto y guarda su lugar mientras carga', async ($, on) => {
+  const leidos: string[] = []
+  // PNG mínimo de 1x1 (la cabecera tiene que ser de PNG de verdad).
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  on('fs.read', async (_$: any, e: any) => {
+    leidos.push(e.path)
+    return e.path.endsWith('.png') ? { value: { base64: PNG } } : { value: '' }
+  })
+  const { m, clock } = await orqSession($, on, { ORQ_ROL: 'orquestador', ORQ_ESTADO_CMD: '/x/estado --json', HC_TERMINAL_ID: 't1' }, () => JSON.stringify(ORQ_JSON))
+  expect(await m.find({ key: 'orq-banner' })).toBeDefined()
+  const fuentes = new Set<string>()
+  for (let i = 0; i < 12; i++) {
+    await clock.advance(140)
+    expect(await m.find({ key: 'orq-banner' })).toBeDefined()
+    for (const f of leidos.filter((x) => x.includes('/assets/orq/'))) fuentes.add(f)
+  }
+  expect([...fuentes].map((f) => f.split('/').pop())).toEqual(['00.png'])
+})
+
 test('cada sesión pide sólo sus workers y es su propio orquestador', async ($, on) => {
   const { m, clock, asked } = await orqSession($, on, {}, () => JSON.stringify({ ...ORQ_JSON, orquestador: 'idle' }), 'ses-1')
   await clock.advance(3000)
