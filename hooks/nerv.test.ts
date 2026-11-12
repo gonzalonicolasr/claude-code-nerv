@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -2070,7 +2070,7 @@ const OM_JSON = {
   },
   aliases: ['opus', 'sonnet', 'haiku', 'fable'],
 }
-const OM_IDS = ['priv8/claude-opus-5-5', 'priv8/claude-sonnet-5-5', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
+const OM_IDS = ['priv8/claude-opus-5-5', 'priv8/claude-sonnet-5-5', 'priv8/claude-opus-4-8', 'priv8/claude-haiku-5-5', 'priv8/claude-fable-5-2', 'priv8/claude-3-5-haiku-20241022', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
 // Perfiles simulados con estado, como los guarda orq: usar/guardar/duplicar/borrar cambian lo que se relee después.
 const OP_FABRICA = [
   { nombre: 'turbo', descripcion: 'Lo más rápido.', config: {} },
@@ -2078,15 +2078,16 @@ const OP_FABRICA = [
   { nombre: 'solo-claude', descripcion: 'Opus, Sonnet y Haiku.', config: {} },
 ]
 type OpEstado = { activo: string | null; modificado: boolean; mios: string[] }
-const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string; json?: any; perfiles?: Partial<OpEstado>; nombre?: string; aviso?: string; perfilesRoto?: boolean } = {}) => {
+const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string; json?: any; perfiles?: Partial<OpEstado>; nombre?: string; aviso?: string; perfilesRoto?: boolean; fabrica?: any[]; fallaEn?: string } = {}) => {
   mock.env(on, { HOME: '/h' })
   mock.store(on)
   const clock = mock.clock(on)
   const asked: string[][] = []
   const pedidos: any[] = []
   const st: OpEstado = { activo: 'turbo', modificado: false, mios: ['mio'], ...opts.perfiles }
-  const fab = (n: string) => OP_FABRICA.some((p) => p.nombre === n)
-  const perfilesJson = () => ({ activo: st.activo, modificado: st.modificado, fabrica: OP_FABRICA, mios: st.mios.map((nombre) => ({ nombre, config: {} })) })
+  const fabrica = opts.fabrica ?? OP_FABRICA
+  const fab = (n: string) => fabrica.some((p) => p.nombre === n)
+  const perfilesJson = () => ({ activo: st.activo, modificado: st.modificado, fabrica, mios: st.mios.map((nombre) => ({ nombre, config: {} })) })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   // $.ui.ask llega como la herramienta AskUserQuestion: se contesta con el nombre pedido o el sugerido.
   on('tool.call', { tool: 'AskUserQuestion' }, (_$: any, e: any) => {
@@ -2125,6 +2126,7 @@ const omSession = async ($: any, on: any, opts: { code?: number; stderr?: string
     }
     if (a[0] === 'orq' && a[1] === 'modelos' && (a[2] === 'set' || a[2] === 'reset')) {
       // Con uno de fábrica activo, tocar un modelo lo deja "modificado" (contrato 3).
+      if (opts.fallaEn === a[3]) return { value: { exitCode: 2, stdout: '', stderr: `No existe el tipo de worker '${a[3]}'.` } }
       if (!opts.code && st.activo && fab(st.activo)) st.modificado = true
       return opts.code ? { value: { exitCode: opts.code, stdout: '', stderr: opts.stderr || '' } } : ok(JSON.stringify({ ok: true, tipo: a[3] }))
     }
@@ -2490,6 +2492,159 @@ test('PERFILES de orq: si orq perfiles --json no contesta lo dice y la lista de 
   await m.press({ key: 'om-t-backend' })
   await hasta('om-c-priv8')
 })
+
+// Atajos de un click: chips de modelo y effort en cada fila, filas por rol y perfiles agrupados.
+const label = async (m: any, key: string) => String((await m.find({ key }))?.props?.label ?? '')
+const notaLista = async (texto: () => Promise<string>, aguja: string) => opListo(texto, aguja)
+
+test('orqMdlRapidos: los 4 de la misma cuenta, el más nuevo de cada uno; sin cuenta, los alias', () => {
+  const ids = [...OM_IDS, 'ag3/claude-opus-4-6-thinking', 'ag3/claude-sonnet-4-6', 'priv8/claude-opus-5-5-thinking']
+  expect(orqMdlRapidos('priv8/claude-opus-4-8', ids, ['opus', 'sonnet', 'haiku', 'fable'])).toEqual([
+    { id: 'priv8/claude-opus-5-5', label: 'opus' },
+    { id: 'priv8/claude-sonnet-5-5', label: 'sonnet' },
+    { id: 'priv8/claude-haiku-5-5', label: 'haiku' },
+    { id: 'priv8/claude-fable-5-2', label: 'fable' },
+  ])
+  expect(orqMdlRapidos('ag3/gemini-3.8-flash-high', ids, [])).toEqual([
+    { id: 'ag3/claude-opus-4-6-thinking', label: 'opus' },
+    { id: 'ag3/claude-sonnet-4-6', label: 'sonnet' },
+  ])
+  expect(orqMdlRapidos('nan/m1', ids, ['opus'])).toEqual([])
+  for (const m of ['sonnet', 'claude-opus-5', '']) expect(orqMdlRapidos(m, ids, ['opus', 'sonnet']).map((x) => x.id)).toEqual(['opus', 'sonnet'])
+  expect(orqMdlCuentaComun(['priv8/a', 'sonnet', 'priv8/b', 'ag3/c'])).toBe('priv8')
+  expect(orqMdlCuentaComun(['sonnet', 'priv8/b'])).toBe('')
+  expect(orqModelosSetUno('*', 'effort', 'low')).toEqual(['orq', 'modelos', 'set', '*', '--effort', 'low'])
+})
+
+test('MODELOS de orq: un click en un effort corre orq modelos set <tipo> --effort y relee', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await enModelos(m, hasta)
+  // El actual va con ◆; los demás sin. Sin "auto" en los chips; medium se lee "med".
+  expect(await label(m, 'om-q-backend-e-high')).toBe('◆ high')
+  expect(await label(m, 'om-q-backend-e-max')).toBe('max')
+  expect(await label(m, 'om-q-coding-e-medium')).toBe('◆ med')
+  expect(await m.find({ key: 'om-q-coding-e-auto' })).toBeUndefined()
+  for (const lvl of ['low', 'medium', 'high', 'xhigh', 'max']) expect(await m.find({ key: 'om-q-*-e-' + lvl })).toBeDefined()
+  const antes = lecturas(asked, 'modelos')
+  await m.press({ key: 'om-q-coding-e-xhigh' })
+  await notaLista(texto, '✓ coding · effort xhigh')
+  expect(omRuns(asked, 'set')).toEqual([['orq', 'modelos', 'set', 'coding', '--effort', 'xhigh']])
+  expect(lecturas(asked, 'modelos')).toBeGreaterThan(antes)
+  // Sigue en la lista: no abre el flujo de cuenta → modelo → effort.
+  expect(await m.find({ key: 'om-list' })).toBeDefined()
+  await m.press({ key: 'om-q-*-e-low' })
+  await notaLista(texto, '✓ default · effort low')
+  expect(omRuns(asked, 'set')[1]).toEqual(['orq', 'modelos', 'set', '*', '--effort', 'low'])
+})
+
+test('MODELOS de orq: un click en un modelo rápido corre orq modelos set <tipo> --modelo y deja el effort', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on)
+  await enModelos(m, hasta)
+  // backend está en priv8: sus atajos son los 4 de priv8 (el opus más nuevo, no el 4-8).
+  for (const [id, lbl] of [['priv8/claude-opus-5-5', '◆ opus'], ['priv8/claude-sonnet-5-5', 'sonnet'], ['priv8/claude-haiku-5-5', 'haiku'], ['priv8/claude-fable-5-2', 'fable']])
+    expect(await label(m, 'om-q-backend-m-' + id)).toBe(lbl)
+  expect(await m.find({ key: 'om-q-backend-m-priv8/claude-opus-4-8' })).toBeUndefined()
+  // coding usa un alias (sonnet): sus atajos son los alias.
+  expect(await label(m, 'om-q-coding-m-sonnet')).toBe('◆ sonnet')
+  expect(await label(m, 'om-q-coding-m-opus')).toBe('opus')
+  await m.press({ key: 'om-q-backend-m-priv8/claude-sonnet-5-5' })
+  await notaLista(texto, '✓ backend → priv8/claude-sonnet-5-5')
+  await m.press({ key: 'om-q-coding-m-haiku' })
+  await notaLista(texto, '✓ coding → haiku')
+  expect(omRuns(asked, 'set')).toEqual([
+    ['orq', 'modelos', 'set', 'backend', '--modelo', 'priv8/claude-sonnet-5-5'],
+    ['orq', 'modelos', 'set', 'coding', '--modelo', 'haiku'],
+  ])
+  // ⋯ otro modelo abre el flujo completo de ese tipo.
+  await m.press({ key: 'om-q-coding-otro' })
+  await hasta('om-c-priv8')
+  expect(await texto()).toContain('paso 1 · cuenta')
+})
+
+test('MODELOS de orq: si orq rechaza el atajo avisa ✗ y no dice ✓', async ($, on) => {
+  const { m, hasta, texto } = await omSession($, on, { code: 3, stderr: 'effort inválido: max' })
+  await enModelos(m, hasta)
+  await m.press({ key: 'om-q-backend-e-max' })
+  await notaLista(texto, '✗ error de orq (código 3): effort inválido: max')
+  expect(await texto()).not.toContain('✓ backend')
+})
+
+const OM_ROLES = {
+  ...OM_JSON,
+  tipos: ['backend', 'coding', 'frontend', 'research', 'docs', 'review', 'security'],
+  config: {
+    '*': { modelo: 'priv8/claude-opus-5-5', effort: 'medium', origen: 'tipo' },
+    backend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    coding: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    frontend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    research: { modelo: 'priv8/claude-sonnet-5-5', effort: 'low', origen: 'tipo' },
+    docs: { modelo: 'sonnet', effort: 'medium', origen: 'tipo' },
+    review: { modelo: 'opus', effort: 'max', origen: 'tipo' },
+    security: { modelo: 'opus', effort: 'max', origen: 'tipo' },
+  },
+}
+
+test('MODELOS de orq: "cambiar todos los de…" aplica el modelo o el effort a cada tipo del rol, en orden', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { json: OM_ROLES })
+  await enModelos(m, hasta)
+  const text = await texto()
+  expect(text).toContain('cambiar todos los de…')
+  for (const r of ['construir', 'leer', 'pensar']) expect(await m.find({ key: 'om-rol-' + r })).toBeDefined()
+  expect(text.indexOf('om-rol-construir')).toBeLessThan(text.indexOf('om-t-*'))
+  // Resaltado sólo si todos los del rol lo tienen.
+  expect(await label(m, 'om-r-construir-e-high')).toBe('◆ high')
+  expect(await label(m, 'om-r-construir-m-priv8/claude-opus-5-5')).toBe('◆ opus')
+  expect(await label(m, 'om-r-leer-e-low')).toBe('low')
+  // pensar está con alias: sus atajos son los alias.
+  expect(await label(m, 'om-r-pensar-m-opus')).toBe('◆ opus')
+  // leer mezcla priv8 y alias: gana la cuenta más repetida (empate → la primera).
+  expect(await m.find({ key: 'om-r-leer-m-priv8/claude-haiku-5-5' })).toBeDefined()
+  await m.press({ key: 'om-r-construir-m-priv8/claude-sonnet-5-5' })
+  await notaLista(texto, '✓ construir (3) → priv8/claude-sonnet-5-5')
+  expect(omRuns(asked, 'set')).toEqual(['coding', 'frontend', 'backend'].map((tp) => ['orq', 'modelos', 'set', tp, '--modelo', 'priv8/claude-sonnet-5-5']))
+  await m.press({ key: 'om-r-pensar-e-xhigh' })
+  await notaLista(texto, '✓ pensar (2) · effort xhigh')
+  expect(omRuns(asked, 'set').slice(3)).toEqual(['review', 'security'].map((tp) => ['orq', 'modelos', 'set', tp, '--effort', 'xhigh']))
+  // Un rol sin ninguno de sus tipos en orq no aparece; tester no está en orq y no se manda.
+  expect(omRuns(asked, 'set').some((a) => a[3] === 'tester')).toBe(false)
+})
+
+test('MODELOS de orq: si un tipo del rol falla, dice cuál y cuántos quedaron', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { json: OM_ROLES, fallaEn: 'frontend' })
+  await enModelos(m, hasta)
+  await m.press({ key: 'om-r-construir-e-low' })
+  await notaLista(texto, 'falló en frontend (2 de 3 quedaron)')
+  expect(await texto()).toContain("✗ error de orq (código 2): No existe el tipo de worker 'frontend'.")
+  expect(omRuns(asked, 'set').map((a) => a[3])).toEqual(['coding', 'frontend', 'backend'])
+})
+
+test('MODELOS de orq: con sólo tipos de un rol, las filas de los otros roles no aparecen', async ($, on) => {
+  const { m, hasta } = await omSession($, on)
+  await enModelos(m, hasta)
+  expect(await m.find({ key: 'om-rol-construir' })).toBeDefined()
+  expect(await m.find({ key: 'om-rol-leer' })).toBeUndefined()
+  expect(await m.find({ key: 'om-rol-pensar' })).toBeUndefined()
+})
+
+for (const [name, props, inner] of [
+  ['44 columnas', PANE_PROPS, 39],
+  ['angosto', { ...PANE_PROPS, bodyColumns: 34, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } }, 30],
+] as [string, any, number][])
+  test(`MODELOS de orq a ${name}: los chips de un click y las filas de rol entran en el ancho`, async ($, on) => {
+    const { m } = await omSession($, on, { json: OM_ROLES })
+    await m.unmount()
+    const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
+    await n.press({ key: 'flap-orq' })
+    await n.press({ key: 'orqtab-modelos' })
+    for (let i = 0; i < 50 && !((await n.find({ key: 'om-t-backend' })) && (await n.find({ key: 'op-p-turbo' }))); i++) await new Promise((r) => setTimeout(r, 10))
+    const tree = await n.drawn()
+    const filas = ytFind(tree, (k) => /^(om-[qr]-.+-[me]|om-rol-.+)$/.test(k))
+    const keys = filas.map((r: any) => String(r.key ?? r.props?.key))
+    for (const k of ['om-q-*-m', 'om-q-*-e', 'om-q-backend-m', 'om-q-security-e', 'om-r-construir-m', 'om-r-leer-e', 'om-rol-pensar']) expect(keys).toContain(k)
+    for (const r of filas) expect([String(r.key ?? r.props?.key), ytWidth(r)]).toEqual([String(r.key ?? r.props?.key), Math.min(ytWidth(r), inner)])
+    // En angosto el "⋯ otro modelo" se achica para entrar.
+    expect(String((await n.find({ key: 'om-q-backend-otro' })).props.label)).toBe(inner >= 39 ? '⋯ otro' : '⋯')
+  })
 
 // YOUTUBE con un reproductor simulado: la cola sale de lo que contesta mpv por el socket.
 const YT_TITLES = ['Small Town Kid - When the Feeling Is Gone (Lyric Video)', 'Bronski Beat - Smalltown Boy (Official Video) 🎵🎵', '久石譲 - 人生のメリーゴーランド ハウルの動く城 サウンドトラック', 'corto']

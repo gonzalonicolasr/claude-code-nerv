@@ -1400,6 +1400,42 @@ export const orqPerfilLibre = (base: string, usados: readonly string[]) => {
   return n
 }
 export const orqModelosSet = (tipo: string, modelo: string, effort: string) => ['orq', 'modelos', 'set', tipo, '--modelo', modelo, '--effort', effort]
+// Atajos de un click: sólo lo que cambia. orq completa el resto con lo que ya tenía el tipo (o el de "*").
+export const orqModelosSetUno = (tipo: string, que: 'modelo' | 'effort', valor: string) => ['orq', 'modelos', 'set', tipo, '--' + que, valor]
+// Los tipos de cada rol para "cambiar todos los de…": sólo se tocan los que orq informa.
+export const ORQ_ROLES: [string, string[]][] = [
+  ['construir', ['coding', 'frontend', 'backend', 'qa', 'debug', 'refactor', 'infra']],
+  ['leer', ['research', 'triage', 'tester', 'docs', 'data', 'ops']],
+  ['pensar', ['review', 'arquitecto', 'security']],
+]
+const OM_FAMILIAS = ['opus', 'sonnet', 'haiku', 'fable']
+// Los modelos rápidos de una fila: opus · sonnet · haiku · fable de la misma cuenta que `modelo`
+// (el más nuevo de cada uno que tenga el CPAM); sin cuenta, los alias del plan de Claude.
+export const orqMdlRapidos = (modelo: string, ids: readonly string[], aliases: readonly string[]) => {
+  const { prefix } = mdlSplit(modelo)
+  if (!prefix) return aliases.map((a) => ({ id: a, label: a }))
+  const mejor: Record<string, { id: string; v: number }> = {}
+  for (const id of ids) {
+    const s = mdlSplit(id)
+    const m = s.prefix === prefix && /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(-thinking)?$/.exec(s.name)
+    if (!m) continue
+    const v = Number(m[2]) * 100 + Number(m[3] || 0) - (m[4] ? 0.5 : 0)
+    if (!mejor[m[1]] || v > mejor[m[1]].v) mejor[m[1]] = { id, v }
+  }
+  return OM_FAMILIAS.filter((f) => mejor[f]).map((f) => ({ id: mejor[f].id, label: f }))
+}
+// La cuenta que más se repite entre los tipos de un rol ('' = el plan de Claude).
+export const orqMdlCuentaComun = (modelos: readonly string[]) => {
+  const n: Record<string, number> = {}
+  let top = ''
+  for (const x of modelos) {
+    const k = mdlSplit(x).prefix
+    n[k] = (n[k] || 0) + 1
+    if (n[k] > (n[top] || 0)) top = k
+  }
+  return top
+}
+const OM_EFFORT_CORTO: Record<string, string> = { medium: 'med' }
 // Las cuentas del CPAM son los grupos con prefijo: un id sin "/" orq lo corre con el plan de Claude.
 export const orqMdlCuentas = (ids: readonly string[], emails: Record<string, string> = {}) => mdlGroups(ids, emails).filter((g) => g.prefix)
 export const orqMdlOrigen = (o?: string) => (o === 'tipo' ? 'propio' : o === 'default' ? 'default' : 'ninguno')
@@ -1588,6 +1624,26 @@ async function orqModelosRun($: any, argv: string[], ok: string) {
   await refreshOrqModelos($)
 }
 
+// Atajo de un click (una fila o todo un rol): corre `orq modelos set` por cada tipo, en orden, avisa ✓/✗ y relee.
+let omCorriendo = false
+async function orqModelosAtajo($: any, tipos: readonly string[], que: 'modelo' | 'effort', valor: string, quien: string) {
+  if (omCorriendo || !tipos.length) return
+  omCorriendo = true
+  omNota = '… guardando'
+  $.ui.invalidate('ui.render')
+  const fallas: { tipo: string; r: any }[] = []
+  for (const tipo of tipos) {
+    const r: any = await $.process.run(orqModelosSetUno(tipo, que, valor), { timeoutMs: 5000 }).catch((err: any) => ({ exitCode: undefined, stderr: String(err?.message || err), stdout: '' }))
+    if (r?.exitCode !== 0) fallas.push({ tipo, r })
+  }
+  const cambio = que === 'modelo' ? `→ ${valor}` : `· effort ${valor}`
+  omNota = !fallas.length
+    ? `✓ ${quien} ${cambio}`
+    : `${orqMdlError(fallas[0].r)}${tipos.length > 1 ? ` · falló en ${fallas.map((f) => f.tipo).join(', ')} (${tipos.length - fallas.length} de ${tipos.length} quedaron)` : ''}`
+  omCorriendo = false
+  await refreshOrqModelos($)
+}
+
 function drawOrqModelos($: any, e: any, h: any) {
   const { Box, Button, Input } = $.ui.resolve(e)
   const { t, span, card, chip, w } = h
@@ -1601,10 +1657,28 @@ function drawOrqModelos($: any, e: any, h: any) {
   }
   const cfg = (tipo: string) => om!.config[tipo]
   if (!omTipo) {
+    // Chip compacto de un click: el actual con ◆ y fondo, el resto apagado.
+    const mini = (key: string, label: string, on: boolean, onPress: () => void) =>
+      Box({ key: 'box-' + key, backgroundColor: on ? C.tabBg : undefined, children: [Button({ key, label: (on ? '◆ ' : '') + label, plain: true, dimColor: !on, onPress })] })
+    const chipsRow = (key: string, items: any[]) => Box({ key, flexDirection: 'row', columnGap: 1, paddingLeft: 2, children: items })
+    // Modelos rápidos de la cuenta de `modelo` y efforts; `todos` dice si un valor ya lo tienen todos los tipos.
+    const atajos = (id: string, tipos: string[], modelo: string, quien: string, todos: (que: 'modelo' | 'effort', v: string) => boolean, otro?: () => void) => {
+      const rapidos = orqMdlRapidos(modelo, mdl.ids, om!.aliases)
+      const ms = rapidos.map((m) => mini(`${id}-m-${m.id}`, m.label, todos('modelo', m.id), () => void orqModelosAtajo($, tipos, 'modelo', m.id, quien)))
+      const usado = rapidos.reduce((n, m) => n + cellWidth(m.label) + 1, 2) + (rapidos.some((m) => todos('modelo', m.id)) ? 2 : 0)
+      const otroLabel = ['⋯ otro modelo', '⋯ otro', '⋯'].find((l) => usado + cellWidth(l) <= w) || '⋯'
+      const efs = om!.efforts.filter((x) => x !== 'auto')
+      return [
+        chipsRow(id + '-m', [...ms, ...(otro ? [Box({ key: 'box-' + id + '-otro', children: [Button({ key: id + '-otro', label: otroLabel, plain: true, onPress: otro })] })] : [])]),
+        chipsRow(id + '-e', efs.map((lvl) => mini(`${id}-e-${lvl}`, OM_EFFORT_CORTO[lvl] || lvl, todos('effort', lvl), () => void orqModelosAtajo($, tipos, 'effort', lvl, quien)))),
+      ]
+    }
+    const abrir = (tipo: string) => () => ((omTipo = tipo), (omCuenta = omModelo = omQuery = omNota = ''), inval())
     const fila = (tipo: string, label: string) => {
       const c = cfg(tipo)
       const origen = orqMdlOrigen(c?.origen)
       const wib = mdlSplit(c?.modelo || '').prefix === 'wibond'
+      const quien = tipo === '*' ? 'default' : tipo
       return Box({
         key: 'om-row-' + tipo,
         flexDirection: 'column',
@@ -1614,19 +1688,36 @@ function drawOrqModelos($: any, e: any, h: any) {
             flexDirection: 'row',
             justifyContent: 'space-between',
             children: [
-              Button({ key: 'om-t-' + tipo, label: '▸ ' + label, plain: true, onPress: () => ((omTipo = tipo), (omCuenta = omModelo = omQuery = omNota = ''), inval()) }),
+              Button({ key: 'om-t-' + tipo, label: '▸ ' + label, plain: true, onPress: abrir(tipo) }),
               t([span(origen, origen === 'propio' ? C.lime : origen === 'default' ? C.cyan : C.dim)]),
             ],
           }),
           t([span('  ' + (wib ? '⚠ ' : '') + clip(orqMdlEfectivo(c), w - 4), wib ? C.red : origen === 'ninguno' ? C.dim : C.text)]),
+          ...atajos('om-q-' + tipo, [tipo], c?.modelo || '', quien, (que, v) => (que === 'modelo' ? c?.modelo === v : c?.effort === v), abrir(tipo)),
+        ],
+      })
+    }
+    // "Cambiar todos los de construir / leer / pensar": los mismos chips, aplicados a cada tipo del rol.
+    const roles = ORQ_ROLES.map(([rol, tipos]) => [rol, tipos.filter((tp) => om!.tipos.includes(tp))] as [string, string[]]).filter(([, tipos]) => tipos.length)
+    const filaRol = ([rol, tipos]: [string, string[]]) => {
+      const cs = tipos.map((tp) => cfg(tp))
+      const cuenta = orqMdlCuentaComun(cs.map((c) => c?.modelo || ''))
+      const modelo = cs.find((c) => mdlSplit(c?.modelo || '').prefix === cuenta)?.modelo || ''
+      return Box({
+        key: 'om-rol-' + rol,
+        flexDirection: 'column',
+        children: [
+          t([span('» ' + rol, C.cyan, { bold: true }), span(clip(` · ${tipos.length} tipo${tipos.length === 1 ? '' : 's'}`, w - rol.length - 2), C.dim)]),
+          ...atajos('om-r-' + rol, tipos, modelo, `${rol} (${tipos.length})`, (que, v) => cs.every((c) => (que === 'modelo' ? c?.modelo : c?.effort) === v)),
         ],
       })
     }
     out.push(drawOrqPerfiles($, e, h))
     out.push(
       card('om-list', '◈ MODELOS · ORQ', C.purple, [
-        t([span('modelo y effort de cada tipo de worker', C.muted)], undefined, { wrap: 'wrap' }),
+        t([span('modelo y effort de cada tipo de worker · un click cambia', C.muted)], undefined, { wrap: 'wrap' }),
         ...nota(),
+        ...(roles.length ? [t([span('cambiar todos los de…', C.muted)]), ...roles.map(filaRol), t([span('─'.repeat(Math.max(0, w)), C.dim)])] : []),
         fila('*', '* default para todos'),
         ...om.tipos.map((tp) => fila(tp, tp)),
         ...(om.tipos.length ? [] : [t([span('orq no informó tipos de worker', C.dim)])]),
