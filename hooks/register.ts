@@ -1756,7 +1756,7 @@ function drawOrqModelos($: any, e: any, h: any) {
     out.push(drawOrqPerfiles($, e, h))
     out.push(
       card('om-list', '◈ MODELOS · ORQ', C.purple, [
-        t([span('modelo y effort de cada tipo de worker · un click cambia', C.muted)], undefined, { wrap: 'wrap' }),
+        t([span('modelo y effort de cada tipo de worker', C.muted)], undefined, { wrap: 'wrap' }),
         ...nota(),
         ...(roles.length ? [t([span('cambiar todos los de…', C.muted)]), ...roles.map(filaRol), t([span('─'.repeat(Math.max(0, w)), C.dim)])] : []),
         fila('*', '* default para todos'),
