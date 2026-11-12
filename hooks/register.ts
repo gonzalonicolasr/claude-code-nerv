@@ -1378,7 +1378,7 @@ export const orqModelosParse = (raw: string): OrqModelos | undefined => {
 
 // Perfiles de modelos de orq (de fábrica y propios), como los de FORGE: se leen con `orq perfiles --json`
 // y se cambian con `orq perfiles usar|guardar|duplicar|borrar`. NERV nunca escribe perfiles.json.
-export type OrqPerfil = { nombre: string; descripcion: string }
+export type OrqPerfil = { nombre: string; descripcion: string; grupo?: string }
 export type OrqPerfiles = { activo: string | null; modificado: boolean; fabrica: OrqPerfil[]; mios: OrqPerfil[] }
 export const orqPerfilesParse = (raw: string): OrqPerfiles | undefined => {
   let j: any
@@ -1389,8 +1389,24 @@ export const orqPerfilesParse = (raw: string): OrqPerfiles | undefined => {
   }
   if (!j || typeof j !== 'object' || !Array.isArray(j.fabrica)) return undefined
   const lista = (v: any): OrqPerfil[] =>
-    (Array.isArray(v) ? v : []).filter((p: any) => p && typeof p.nombre === 'string' && p.nombre).map((p: any) => ({ nombre: p.nombre, descripcion: typeof p.descripcion === 'string' ? p.descripcion : '' }))
+    (Array.isArray(v) ? v : [])
+      .filter((p: any) => p && typeof p.nombre === 'string' && p.nombre)
+      .map((p: any) => ({ nombre: p.nombre, descripcion: typeof p.descripcion === 'string' ? p.descripcion : '', ...(typeof p.grupo === 'string' && p.grupo.trim() ? { grupo: p.grupo.trim() } : {}) }))
   return { activo: typeof j.activo === 'string' && j.activo ? j.activo : null, modificado: j.modificado === true, fabrica: lista(j.fabrica), mios: lista(j.mios) }
+}
+// Los de fábrica agrupados por `grupo`, en el orden en que llegan; sin ningún grupo, uno solo sin nombre.
+// Si sólo algunos traen grupo, los que no van al final en "otros".
+export const orqPerfilGrupos = (lista: readonly OrqPerfil[]) => {
+  if (!lista.some((p) => p.grupo)) return lista.length ? [{ grupo: '', perfiles: [...lista] }] : []
+  const by = new Map<string, OrqPerfil[]>()
+  for (const p of lista) {
+    const g = p.grupo || ''
+    if (!by.has(g)) by.set(g, [])
+    by.get(g)!.push(p)
+  }
+  const sin = by.get('')
+  by.delete('')
+  return [...[...by].map(([grupo, perfiles]) => ({ grupo, perfiles })), ...(sin ? [{ grupo: 'otros', perfiles: sin }] : [])]
 }
 export const orqPerfilArgv = (verbo: 'usar' | 'guardar' | 'duplicar' | 'borrar', ...nombres: string[]) => ['orq', 'perfiles', verbo, ...nombres]
 // Un nombre que todavía no usa ningún perfil: base, base-2, base-3…
@@ -1568,12 +1584,37 @@ function drawOrqPerfiles($: any, e: any, h: any) {
   if (opAviso) rows.push(t([span('⚠ ' + opAviso, C.amber)], undefined, { wrap: 'wrap' }))
   if (opBorrar) rows.push(t([span(`tocá ✕ otra vez para borrar ${opBorrar}`, C.amber, { bold: true })], undefined, { wrap: 'wrap' }))
   if (opErr) rows.push(t([span('✗ ' + opErr, C.red)]))
+  // Con el mouse encima, el chip se ilumina junto con su descripción (que está oculta abajo de la grilla).
   const sel = (n: string, ancho: number) =>
-    Box({ key: 'opbox-' + n, width: ancho, paddingX: 1, backgroundColor: activo === n ? C.tabBg : C.chipDim, children: [Button({ key: 'op-p-' + n, label: clip((activo === n ? '● ' : '') + n, ancho - 2), plain: true, dimColor: activo !== n, onPress: usar(n) })] })
+    Box({
+      key: 'opbox-' + n,
+      width: ancho,
+      paddingX: 1,
+      backgroundColor: activo === n ? C.tabBg : C.chipDim,
+      hover: { scope: 'opd-' + n, backgroundColor: C.tabBg },
+      children: [Button({ key: 'op-p-' + n, label: clip((activo === n ? '● ' : '') + n, ancho - 2), plain: true, dimColor: activo !== n, onPress: usar(n) })],
+    })
   const colW = Math.floor((w - 1) / 2)
   rows.push(Box({ key: 'op-sec-fabrica', marginTop: 1, children: [t([span('FÁBRICA', C.cyan, { bold: true }), span(` · ${op.fabrica.length}`, C.dim)])] }))
-  for (let i = 0; i < op.fabrica.length; i += 2)
-    rows.push(Box({ key: 'op-fab-' + i, flexDirection: 'row', columnGap: 1, children: op.fabrica.slice(i, i + 2).map((p) => sel(p.nombre, colW)) }))
+  // De a dos por fila si los dos nombres entran enteros en media columna (con lugar para "● ");
+  // un nombre largo va solo y a todo el ancho.
+  const entra = (p?: OrqPerfil) => !!p && cellWidth(p.nombre) + 2 <= colW - 2
+  let i = 0
+  for (const g of orqPerfilGrupos(op.fabrica)) {
+    if (g.grupo) rows.push(Box({ key: 'op-g-' + g.grupo, children: [t([span(clip(g.grupo, w - 6), C.violet, { bold: true }), span(` · ${g.perfiles.length}`, C.dim)])] }))
+    for (let j = 0; j < g.perfiles.length; ) {
+      const par = entra(g.perfiles[j]) && entra(g.perfiles[j + 1]) ? 2 : 1
+      const fila = g.perfiles.slice(j, j + par)
+      rows.push(Box({ key: 'op-fab-' + i, flexDirection: 'row', columnGap: 1, children: fila.map((p) => sel(p.nombre, entra(p) ? colW : w)) }))
+      j += par
+      i += par
+    }
+  }
+  for (const p of op.fabrica)
+    if (p.descripcion)
+      rows.push(
+        Box({ key: 'opd-' + p.nombre, display: 'none', hover: { scope: 'opd-' + p.nombre, display: 'flex' }, children: [t([span(p.nombre + ': ', C.cyan, { bold: true }), span(p.descripcion, C.text)], undefined, { wrap: 'wrap' })] }),
+      )
   rows.push(
     Box({
       key: 'op-sec-mios',

@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqPerfilGrupos, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -2626,22 +2626,81 @@ test('MODELOS de orq: con sólo tipos de un rol, las filas de los otros roles no
   expect(await m.find({ key: 'om-rol-pensar' })).toBeUndefined()
 })
 
+const OP_GRUPOS = [
+  { nombre: 'turbo', descripcion: 'Lo más rápido.', grupo: 'todo uno', config: {} },
+  { nombre: 'opus-edita-sonnet-lee', descripcion: 'Opus construye y Sonnet lee.', grupo: 'mezclas', config: {} },
+  { nombre: 'solo-claude', descripcion: 'Opus, Sonnet y Haiku.', grupo: 'todo uno', config: {} },
+  { nombre: 'barato', descripcion: 'Barato: Gemini construye.', grupo: 'mezclas', config: {} },
+  { nombre: 'suelto', descripcion: '', config: {} },
+]
+
+test('orqPerfilGrupos: agrupa por grupo en el orden en que llegan; sin grupo, uno solo; los sueltos van a "otros"', () => {
+  const p = orqPerfilesParse(JSON.stringify({ activo: null, fabrica: OP_GRUPOS, mios: [] }))!
+  expect(p.fabrica[0]).toEqual({ nombre: 'turbo', descripcion: 'Lo más rápido.', grupo: 'todo uno' })
+  expect(p.fabrica[4]).toEqual({ nombre: 'suelto', descripcion: '' })
+  expect(orqPerfilGrupos(p.fabrica).map((g) => [g.grupo, g.perfiles.map((x) => x.nombre)])).toEqual([
+    ['todo uno', ['turbo', 'solo-claude']],
+    ['mezclas', ['opus-edita-sonnet-lee', 'barato']],
+    ['otros', ['suelto']],
+  ])
+  const sin = orqPerfilesParse(JSON.stringify({ activo: null, fabrica: OP_FABRICA, mios: [] }))!
+  expect(orqPerfilGrupos(sin.fabrica).map((g) => [g.grupo, g.perfiles.length])).toEqual([['', 3]])
+  expect(orqPerfilGrupos([])).toEqual([])
+})
+
+test('PERFILES de orq: con grupo, un subtítulo por grupo; nombres largos enteros y la descripción al pasar el mouse', async ($, on) => {
+  const { m, asked, hasta, texto } = await omSession($, on, { fabrica: OP_GRUPOS })
+  await enModelos(m, hasta)
+  const tree = await m.drawn()
+  const text = JSON.stringify(tree)
+  const keys = ytFind(tree, (k) => /^op-g-/.test(k)).map((x: any) => String(x.key ?? x.props?.key))
+  expect(keys).toEqual(['op-g-todo uno', 'op-g-mezclas', 'op-g-otros'])
+  expect(text.indexOf('op-g-todo uno')).toBeLessThan(text.indexOf('op-p-solo-claude'))
+  expect(text.indexOf('op-p-solo-claude')).toBeLessThan(text.indexOf('op-g-mezclas'))
+  expect(text.indexOf('op-g-mezclas')).toBeLessThan(text.indexOf('op-p-opus-edita-sonnet-lee'))
+  expect(await label(m, 'op-p-opus-edita-sonnet-lee')).toBe('opus-edita-sonnet-lee')
+  // La descripción está oculta y aparece con el mouse sobre el chip (mismo grupo de hover).
+  const desc = ytFind(tree, (k) => k === 'opd-opus-edita-sonnet-lee')[0]
+  expect(desc.props.display).toBe('none')
+  expect(desc.hover).toEqual({ scope: 'opd-opus-edita-sonnet-lee', display: 'flex' })
+  expect(JSON.stringify(desc)).toContain('Opus construye y Sonnet lee.')
+  const chipBox = ytFind(tree, (k) => k === 'opbox-opus-edita-sonnet-lee')[0]
+  expect(chipBox.hover.scope).toBe('opd-opus-edita-sonnet-lee')
+  // Sin descripción no hay nada que mostrar.
+  expect(ytFind(tree, (k) => k === 'opd-suelto')).toHaveLength(0)
+  // Un toque sigue siendo usar.
+  await m.press({ key: 'op-p-opus-edita-sonnet-lee' })
+  await opListo(texto, '✓ usando opus-edita-sonnet-lee')
+  expect(opRuns(asked)).toEqual([['orq', 'perfiles', 'usar', 'opus-edita-sonnet-lee']])
+})
+
+test('PERFILES de orq: sin grupo no hay subtítulos, todos bajo FÁBRICA como antes', async ($, on) => {
+  const { m, hasta } = await omSession($, on)
+  await enModelos(m, hasta)
+  const tree = await m.drawn()
+  expect(ytFind(tree, (k) => /^op-g-/.test(k))).toHaveLength(0)
+  expect(JSON.stringify(tree)).toContain('FÁBRICA')
+  expect(ytFind(tree, (k) => /^op-fab-\d+$/.test(k)).map((x: any) => String(x.key ?? x.props?.key))).toEqual(['op-fab-0', 'op-fab-2'])
+})
+
 for (const [name, props, inner] of [
   ['44 columnas', PANE_PROPS, 39],
   ['angosto', { ...PANE_PROPS, bodyColumns: 34, placement: 'inline', scroll: { offset: 0, bodyRows: 17, contentRows: 40 } }, 30],
 ] as [string, any, number][])
-  test(`MODELOS de orq a ${name}: los chips de un click y las filas de rol entran en el ancho`, async ($, on) => {
-    const { m } = await omSession($, on, { json: OM_ROLES })
+  test(`MODELOS de orq a ${name}: los chips de un click, las filas de rol y los perfiles agrupados entran en el ancho`, async ($, on) => {
+    const { m } = await omSession($, on, { json: OM_ROLES, fabrica: OP_GRUPOS, perfiles: { activo: 'opus-edita-sonnet-lee' } })
     await m.unmount()
     const n: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props })
     await n.press({ key: 'flap-orq' })
     await n.press({ key: 'orqtab-modelos' })
     for (let i = 0; i < 50 && !((await n.find({ key: 'om-t-backend' })) && (await n.find({ key: 'op-p-turbo' }))); i++) await new Promise((r) => setTimeout(r, 10))
     const tree = await n.drawn()
-    const filas = ytFind(tree, (k) => /^(om-[qr]-.+-[me]|om-rol-.+)$/.test(k))
+    const filas = ytFind(tree, (k) => /^(om-[qr]-.+-[me]|om-rol-.+|op-fab-\d+|op-g-.+)$/.test(k))
     const keys = filas.map((r: any) => String(r.key ?? r.props?.key))
-    for (const k of ['om-q-*-m', 'om-q-*-e', 'om-q-backend-m', 'om-q-security-e', 'om-r-construir-m', 'om-r-leer-e', 'om-rol-pensar']) expect(keys).toContain(k)
+    for (const k of ['om-q-*-m', 'om-q-*-e', 'om-q-backend-m', 'om-q-security-e', 'om-r-construir-m', 'om-r-leer-e', 'om-rol-pensar', 'op-g-mezclas', 'op-fab-0']) expect(keys).toContain(k)
     for (const r of filas) expect([String(r.key ?? r.props?.key), ytWidth(r)]).toEqual([String(r.key ?? r.props?.key), Math.min(ytWidth(r), inner)])
+    // El nombre largo del perfil activo se ve entero, con su ●.
+    expect(String((await n.find({ key: 'op-p-opus-edita-sonnet-lee' })).props.label)).toBe('● opus-edita-sonnet-lee')
     // En angosto el "⋯ otro modelo" se achica para entrar.
     expect(String((await n.find({ key: 'om-q-backend-otro' })).props.label)).toBe(inner >= 39 ? '⋯ otro' : '⋯')
   })
