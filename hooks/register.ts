@@ -2960,7 +2960,7 @@ function draw($: any, e: any) {
 
   if (tab === 'live') {
     const nat = (aspect: number) => Math.max(4, Math.min(32, Math.ceil((w + 2) * 0.462 * aspect)))
-    const full: Record<string, number> = { cam: nat(848 / 1328), ip: nat(3 / 4) }
+    const full: Record<string, number> = { cam: nat(720 / 900), ip: nat(3 / 4) }
     const sz: Record<string, number> = { ...full }
     const slot = (key: string) => Box({ key: `live-slot-${key}`, height: sz[key] })
     // Los datos de cada cámara van en filas que ya existen, así el hueco de la ventana es más alto.
