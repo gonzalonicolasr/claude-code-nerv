@@ -890,6 +890,47 @@ test('MODELOS: "cambiar acá" cierra este Claude y un ayudante retoma la misma c
   expect(cmd).not.toContain('viejo')
 })
 
+test('MODELOS: "cambiar acá" también anda en la Herdr app (sin HERDR_PANE_ID, con hc)', async ($, on) => {
+  mock.env(on, { HOME: '/h', HC_TERMINAL_ID: 't3h' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.cwd', async () => ({ value: '/tmp' }))
+  const spawned: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh' && a[2]?.includes('/v1/models')) return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'read' && a[2] === 't3h') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0\n', stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'get' && a[2] === 't3h')
+      return { value: { exitCode: 0, stdout: JSON.stringify({ address: 't3h', labels: {}, foreground: { name: 'claude', argv: ['/x/claude', '--permission-mode', 'bypassPermissions', '--resume', 'viejo', '--model', 'fable'] } }), stderr: '' } }
+    if (a.join(' ').includes('"type":"user"')) return { value: { exitCode: 0, stdout: '', stderr: '' } }
+    if (a[0] === 'sh' && a[2]?.startsWith('setsid')) spawned.push(a)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const exits: number[] = []
+  on('command.run', { command: 'exit' }, async () => (exits.push(1), { text: '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.drawn()
+  await m.press({ key: 'mdl-nan/qwen3.8-flash' })
+  await m.press({ key: 'mdl-swap' })
+  for (let i = 0; i < 50 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(JSON.stringify(await m.drawn())).not.toContain('sólo se puede dentro de herdr')
+  expect(exits).toEqual([1])
+  expect(spawned.length).toBe(1)
+  const [, , , py, term, cmd, via] = spawned[0]!
+  expect(term).toBe('t3h')
+  expect(via).toBe('hc')
+  // El ayudante espera la shell y tipea con hc (en la app no hay `herdr pane`).
+  expect(py).toContain("['hc','get',pane,'--json']")
+  expect(py).toContain("['hc','send',pane,cmd]")
+  expect(cmd).toContain('--resume s1 --model nan/qwen3.8-flash')
+  expect(cmd).toContain("'--permission-mode' 'bypassPermissions'")
+  expect(cmd).not.toContain('viejo')
+})
+
 test('MAGI: cambiar de cuenta retoma la misma conversación en el mismo pane aunque la carpeta haya cambiado', async ($, on) => {
   mock.env(on, { HOME: '/h', HERDR_PANE_ID: 'w1:p1', HERDR_WORKSPACE_ID: 'w1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' })
   mock.store(on)

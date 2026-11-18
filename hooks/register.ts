@@ -168,6 +168,7 @@ let runDir = '/tmp'
 // (la visibilidad sale de checkAppFocus) y herdr-core rechaza las imágenes kitty por archivo
 // (t=f → EINVAL unsupported medium): ahí las imágenes van como bytes PNG, leídos una vez.
 let inHerdrApp = false
+let hcId = ''
 const imgBytes: Record<string, string> = {}
 const imgObj: Record<string, { png: string }> = {}
 // Un mismo archivo devuelve el mismo objeto {png}: así el diff de la app no reenvía el PNG en cada render.
@@ -607,7 +608,7 @@ async function loadEmails($: any) {
 
 async function switchAccount($: any, id: string) {
   // En el mismo pane y la misma conversación: cierra este Claude y lo retoma ahí con la otra cuenta.
-  acctNote = working ? 'esperá a que termine el turno' : !paneId || !sessionId ? 'sólo se puede dentro de herdr' : ''
+  acctNote = working ? 'esperá a que termine el turno' : (!paneId && !hcId) || !sessionId ? 'sólo se puede dentro de herdr' : ''
   if (!acctNote && id === 'priv8' && !mdl.ids.length) await refreshModels($, true)
   let target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
   if (!acctNote && id === 'priv8' && !target) {
@@ -4139,20 +4140,26 @@ export const promptDraft = (screen: string) => {
   return text.startsWith('Try "') ? '' : text
 }
 // Corre suelto (setsid) para sobrevivir al /exit: espera hasta 10 s a que el pane vuelva a la
-// shell y recién ahí tipea el comando. Si Claude no salió, no hace nada.
+// shell y recién ahí tipea el comando. Si Claude no salió, no hace nada. Con 'hc' de 3er argumento
+// es una terminal de la Herdr app (herdr-core): ahí no existe `herdr pane`, se usa `hc`.
 const RELAUNCH_PY = `import json,subprocess,sys,time
 pane,cmd=sys.argv[1],sys.argv[2]
+hc=sys.argv[3:]==['hc']
 def shell():
     try:
-        r=subprocess.run(['herdr','pane','process-info','--pane',pane],capture_output=True,text=True,timeout=5)
-        ps=json.loads(r.stdout)['result']['process_info']['foreground_processes']
+        if hc:
+            r=subprocess.run(['hc','get',pane,'--json'],capture_output=True,text=True,timeout=5)
+            ps=[json.loads(r.stdout).get('foreground') or {}]
+        else:
+            r=subprocess.run(['herdr','pane','process-info','--pane',pane],capture_output=True,text=True,timeout=5)
+            ps=json.loads(r.stdout)['result']['process_info']['foreground_processes']
         return bool(ps) and all(p.get('name') in ('fish','bash','zsh','sh') for p in ps)
     except Exception:
         return False
 for _ in range(40):
     time.sleep(0.25)
     if shell():
-        subprocess.run(['herdr','pane','run',pane,cmd],capture_output=True,timeout=10)
+        subprocess.run(['hc','send',pane,cmd] if hc else ['herdr','pane','run',pane,cmd],capture_output=True,timeout=10)
         break
 `
 // Dónde guarda Claude Code el transcript: projects/<cwd con todo lo no alfanumérico -> '-'>/<sid>.jsonl
@@ -4324,15 +4331,28 @@ async function relaunchHere($: any, id: string) {
   mdlNoteFor = id
   const say = (s: string) => ((mdlNote = s), $.ui.invalidate('ui.render'))
   if (working) return say('⚠ esperá a que termine el turno')
-  if (!paneId) return say('⚠ sólo se puede dentro de herdr')
-  const screen = (await $.process.run(['herdr', 'pane', 'read', paneId, '--source', 'visible', '--format', 'text'], { timeoutMs: 5000 }).catch(() => undefined))?.stdout || ''
+  // En la Herdr app no hay HERDR_PANE_ID: la terminal es la de HC_TERMINAL_ID y se maneja con `hc`.
+  const app = !paneId && !!hcId
+  const term = paneId || hcId
+  if (!term) return say('⚠ sólo se puede dentro de herdr')
+  const read = app ? ['hc', 'read', hcId] : ['herdr', 'pane', 'read', paneId, '--source', 'visible', '--format', 'text']
+  const screen = (await $.process.run(read, { timeoutMs: 5000 }).catch(() => undefined))?.stdout || ''
   if (promptDraft(String(screen))) return say('⚠ tenés texto en el prompt: mandalo o borralo y volvé a tocar')
-  const info = await herdrJson($, ['pane', 'process-info', '--pane', paneId])
-  const cl = (info?.process_info?.foreground_processes || []).find((p: any) => p?.name === 'claude')
+  let cl: any
+  if (app) {
+    const r = await $.process.run(['hc', 'get', hcId, '--json'], { timeoutMs: 5000 }).catch(() => undefined)
+    try {
+      const fg = r?.exitCode === 0 ? JSON.parse(r.stdout)?.foreground : undefined
+      cl = fg?.name === 'claude' ? fg : undefined
+    } catch {}
+  } else {
+    const info = await herdrJson($, ['pane', 'process-info', '--pane', paneId])
+    cl = (info?.process_info?.foreground_processes || []).find((p: any) => p?.name === 'claude')
+  }
   const { cmd, hasTranscript } = await launchPlan($, id, false, cl?.argv ? keepFlags(cl.argv) : '')
   if (!cmd || !cwdNow) return say('⚠ no sé el id o la carpeta de esta sesión')
   const run = await $.process
-    .run(['sh', '-c', 'setsid -f python3 -c "$0" "$1" "$2" >/dev/null 2>&1 </dev/null', RELAUNCH_PY, paneId, cmd], { timeoutMs: 5000 })
+    .run(['sh', '-c', 'setsid -f python3 -c "$0" "$@" >/dev/null 2>&1 </dev/null', RELAUNCH_PY, term, cmd, ...(app ? ['hc'] : [])], { timeoutMs: 5000 })
     .catch(() => undefined)
   if (run?.exitCode !== 0) return say('⚠ no pude lanzar el ayudante: quedó como estaba')
   say(hasTranscript ? 'cerrando y reabriendo acá…' : 'cerrando y abriendo acá (sesión nueva: esta todavía no tiene historial)…')
@@ -5203,7 +5223,8 @@ export function register(on: any) {
     const r = await next(e)
     home = (await $.env.get('HOME').catch(() => '')) || ''
     runDir = (await $.env.get('XDG_RUNTIME_DIR').catch(() => '')) || '/tmp'
-    inHerdrApp = !!(await $.env.get('HC_TERMINAL_ID').catch(() => ''))
+    hcId = String((await $.env.get('HC_TERMINAL_ID').catch(() => '')) || '')
+    inHerdrApp = !!hcId
     paneId = (await $.env.get('HERDR_PANE_ID').catch(() => '')) || ''
     account = String((await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || '').replace(/\/+$/, '').split('/').pop()!.replace(/^\.?claude-?/i, '').toUpperCase()
     sessionId = (await $.session.id().catch(() => '')) || ''
