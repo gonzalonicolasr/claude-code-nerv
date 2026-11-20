@@ -19,8 +19,9 @@ abiertas y lo que pliegues queda guardado).
     el contexto o la cuota arriba del 85 % pasa a **BATERÍA INTERNA**: se pone roja y estima cuánto
     tiempo te queda al ritmo actual.
     En **CUENTA → cambiar ▾** pasás la conversación entre tu cuenta personal (directo a Anthropic)
-    y **gon** (la misma cuenta personal por el CPAM, prefijo `gon/`): abre una tab nueva de herdr que la
-    reanuda en fork, con el mismo Claude si `gon/` lo tiene. También `/nerv cuenta <personal|gon>`.
+    y **gon** (la misma cuenta personal por el CPAM, prefijo `gon/`): cierra este Claude y retoma **la
+    misma conversación en el mismo pane** (sin fork), con el mismo Claude si `gon/` lo tiene. También
+    `/nerv cuenta <personal|gon>` o el menú de la banda bajo el prompt.
     `priv8` está pausada: sólo aparece en el menú si el CPAM vuelve a exponer modelos `priv8/`.
   - **Actividad:** qué herramienta está corriendo y hace cuánto, archivos editados **sin verificar**
     y **PATTERN BLUE** cuando el mismo error se repite tres veces.
