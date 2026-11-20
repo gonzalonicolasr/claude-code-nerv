@@ -1056,6 +1056,64 @@ test('CUENTA: el menú ofrece personal y gon; priv8 (pausada) sólo si el CPAM e
   expect(ids(acctOptions('priv8', sinPriv8))).toEqual(['personal', 'gon'])
 })
 
+// Sesión personal (directo a Anthropic, sin ANTHROPIC_BASE_URL) dentro de herdr, con el CPAM
+// exponiendo `cpamIds`. Devuelve los ayudantes lanzados (el comando con el que se reabre).
+const personalEnHerdr = async ($: any, on: any, cpamIds: string[]) => {
+  mock.env(on, { HOME: '/h', HERDR_PANE_ID: 'w1:p1', HERDR_WORKSPACE_ID: 'w1' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('session.id', async () => ({ value: 's1' }))
+  on('session.model', async () => ({ value: 'claude-sonnet-5-5' }))
+  on('session.cwd', async () => ({ value: '/h/proj' }))
+  const spawned: string[] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh' && a[2]?.includes('/v1/models')) return { value: { exitCode: 0, stdout: JSON.stringify({ data: cpamIds.map((id) => ({ id })) }), stderr: '' } }
+    if (a[0] === 'herdr' && a[2] === 'read') return { value: { exitCode: 0, stdout: '❯\xa0\n', stderr: '' } }
+    if (a[0] === 'herdr' && a[2] === 'process-info') return { value: { exitCode: 0, stdout: JSON.stringify({ result: { process_info: { foreground_processes: [{ name: 'claude', argv: ['claude'] }] } } }), stderr: '' } }
+    if (a[0] === 'sh' && a[2]?.startsWith('setsid')) spawned.push(a[5]!)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('command.run', { command: 'exit' }, async () => ({ text: '' }))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/h/proj', surface: null, isInteractive: false })
+  return spawned
+}
+
+test('CUENTA: /nerv cuenta gon retoma con gon/<el mismo Claude>, nunca con priv8/ aunque el CPAM la exponga', async ($, on) => {
+  const spawned = await personalEnHerdr($, on, ['gon/claude-opus-5-5', 'gon/claude-sonnet-5-5', 'priv8/claude-sonnet-5-5'])
+  await $.command.run({ command: 'nerv', args: 'cuenta gon' })
+  expect(spawned.length).toBe(1)
+  expect(spawned[0]).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8317')
+  expect(spawned[0]).toContain('--model gon/claude-sonnet-5-5')
+  expect(spawned[0]).not.toContain('priv8')
+})
+
+test('CUENTA: /nerv cuenta sólo acepta las cuentas ofrecidas y el aviso nombra el prefijo pedido', async ($, on) => {
+  // El CPAM no expone gon/ ni priv8/ (pausada).
+  const spawned = await personalEnHerdr($, on, ['nan/qwen3.8-flash'])
+  for (const id of ['priv8', 'wibond', 'personal', '']) {
+    const r: any = await $.command.run({ command: 'nerv', args: `cuenta ${id}`.trim() })
+    expect(r.text).toBe('uso: /nerv cuenta <gon> · ahora: personal')
+  }
+  const r: any = await $.command.run({ command: 'nerv', args: 'cuenta gon' })
+  expect(r.text).toBe('NERV: el CPAM no expone gon/ — falta el prefix')
+  expect(spawned).toEqual([])
+})
+
+test('CUENTA: el menú de la banda ofrece gon sin priv8 pausada, y tocarlo retoma con gon/', async ($, on) => {
+  const spawned = await personalEnHerdr($, on, ['gon/claude-opus-5-5', 'gon/claude-sonnet-5-5'])
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'AbovePrompt', requestId: 'nerv', props: { hasSurvey: false } })
+  await m.press({ key: 'band-acct' })
+  expect(await m.find({ key: 'band-go-gon' })).toBeDefined()
+  expect(await m.find({ key: 'band-go-priv8' })).toBeUndefined()
+  expect(await m.find({ key: 'band-go-personal' })).toBeUndefined()
+  await m.press({ key: 'band-go-gon' })
+  for (let i = 0; i < 50 && !spawned.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(spawned.length).toBe(1)
+  expect(spawned[0]).toContain('--model gon/claude-sonnet-5-5')
+})
+
 test('CPAM: la firma cambia al sumar un prefix o tocar el config.yaml, no por el orden de los archivos', () => {
   const a: { name: string; prefix?: string }[] = [{ name: 'claude-a.json', prefix: 'ag' }, { name: 'claude-b.json' }]
   const conf = { mtimeMs: 1, size: 10 }
