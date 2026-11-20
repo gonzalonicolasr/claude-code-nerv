@@ -19,8 +19,9 @@ abiertas y lo que pliegues queda guardado).
     el contexto o la cuota arriba del 85 % pasa a **BATERÍA INTERNA**: se pone roja y estima cuánto
     tiempo te queda al ritmo actual.
     En **CUENTA → cambiar ▾** pasás la conversación entre tu cuenta personal (directo a Anthropic)
-    y **priv8** (la cuenta del CPAM con prefijo `priv8`): abre una tab nueva de herdr que la
-    reanuda en fork, con el mismo Claude si priv8 lo tiene. También `/nerv cuenta <personal|priv8>`.
+    y **gon** (la misma cuenta personal por el CPAM, prefijo `gon/`): abre una tab nueva de herdr que la
+    reanuda en fork, con el mismo Claude si `gon/` lo tiene. También `/nerv cuenta <personal|gon>`.
+    `priv8` está pausada: sólo aparece en el menú si el CPAM vuelve a exponer modelos `priv8/`.
   - **Actividad:** qué herramienta está corriendo y hace cuánto, archivos editados **sin verificar**
     y **PATTERN BLUE** cuando el mismo error se repite tres veces.
   - **Tareas:** comandos y subagentes en segundo plano, con su estado.
@@ -67,8 +68,8 @@ pasa, sale un confeti. En los turnos de más de 3 minutos llega una notificació
 
 Debajo del prompt, bajo la línea de Claude Code (`auto mode on`, `esc to interrupt`), va una
 **línea NERV** fija: `ネルフ ⟋ ◆ cuenta CPAM|ANTHROPIC ⟋ modelo ⟋ SYNC ▰▰▱▱▱ usado/total % ⟋ EFFORT
-⟋ ⎇ rama ●cambios ⟋ 5H % ⟋ $costo`. Por el CPAM la cuenta sale del prefijo del modelo (`ag3/`,
-`nan/`, `priv8/`…) y su email; directo, del `CLAUDE_CONFIG_DIR` (`personal` para `~/.claude`). La
+⟋ ⎇ rama ●cambios ⟋ 5H % ⟋ $costo`. Por el CPAM la cuenta sale del prefijo del modelo (`gon/`,
+`wibond/`, `ds/`…) y su email; directo, del `CLAUDE_CONFIG_DIR` (`personal` para `~/.claude`). La
 cuenta de Wibond va en ámbar con ⚠. La ventana de contexto es `CLAUDE_CODE_MAX_CONTEXT_TOKENS` si
 está, si no la que reporta la sesión. En una terminal angosta se caen primero costo, 5H, rama y
 effort.

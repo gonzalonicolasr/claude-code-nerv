@@ -102,9 +102,13 @@ let configDir = ''
 let acctMenu = false
 let acctNote = ''
 const emails: Record<string, string> = {}
-const ACCOUNTS = [
+// Cuentas de una sesión con ~/.claude: personal va directo a Anthropic; las que no tienen `conf`
+// van por el CPAM con un modelo de su prefijo (gon/ = la cuenta personal de Gon por el CPAM).
+// priv8 está pausada: `optional` = sólo se ofrece mientras el CPAM exponga modelos priv8/.
+const ACCOUNTS: { id: string; conf: string; tag: string; optional?: boolean }[] = [
   { id: 'personal', conf: '.claude.json', tag: 'PERSONAL' },
-  { id: 'priv8', conf: '', tag: 'CPAM' },
+  { id: 'gon', conf: '', tag: 'CPAM gon/' },
+  { id: 'priv8', conf: '', tag: 'CPAM priv8/', optional: true },
 ]
 let health = { ok: true, when: '', text: '' }
 let recap: { prompt: string; at: number } | undefined
@@ -577,18 +581,26 @@ async function refreshPRs($: any) {
     }
 }
 
-// Cuenta de la sesión: personal = ~/.claude directo a Anthropic; priv8 = la misma config pero por
-// el CPAM con un modelo priv8/…. Otro config dir (Wibond) u otro prefijo del CPAM: sin menú.
-export const acctFor = (o: { configDir: string; home: string; cpam: boolean; model: string }) =>
-  o.configDir && o.configDir !== `${o.home}/.claude` ? '' : !o.cpam ? 'personal' : /^priv8\//.test(o.model) ? 'priv8' : ''
-// El modelo priv8/ al que se pasa: el mismo Claude de ahora si priv8 lo tiene, si no el mismo
-// tipo (opus/sonnet/haiku) más nuevo, si no el opus más nuevo. '' = el CPAM no expone priv8/.
-export const priv8Pick = (ids: readonly string[], model: string) => {
-  const mine = ids.filter((x) => /^priv8\/claude-/.test(x)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+// Cuenta de la sesión: personal = ~/.claude directo a Anthropic; gon (o priv8) = la misma config
+// pero por el CPAM con un modelo de ese prefijo. Otro config dir (Wibond) u otro prefijo: sin menú.
+export const acctFor = (o: { configDir: string; home: string; cpam: boolean; model: string }) => {
+  if (o.configDir && o.configDir !== `${o.home}/.claude`) return ''
+  if (!o.cpam) return 'personal'
+  const prefix = /^([\w.-]+)\//.exec(o.model)?.[1] || ''
+  return ACCOUNTS.some((a) => !a.conf && a.id === prefix) ? prefix : ''
+}
+// El modelo `prefix/` al que se pasa: el mismo Claude de ahora si esa cuenta lo tiene, si no el
+// mismo tipo (opus/sonnet/haiku) más nuevo, si no el opus más nuevo. '' = el CPAM no expone el prefijo.
+export const cpamPick = (ids: readonly string[], prefix: string, model: string) => {
+  const mine = ids.filter((x) => x.startsWith(`${prefix}/claude-`)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
   const b = bare(model).replace(/\[.*\]$/, '')
   const fam = /^(?:claude-)?(opus|sonnet|haiku|fable)\b/.exec(b)?.[1] || 'opus'
-  return mine.find((x) => x === 'priv8/' + b) || mine.find((x) => x.startsWith(`priv8/claude-${fam}-`)) || mine.find((x) => x.startsWith('priv8/claude-opus-')) || mine[0] || ''
+  return mine.find((x) => x === `${prefix}/${b}`) || mine.find((x) => x.startsWith(`${prefix}/claude-${fam}-`)) || mine.find((x) => x.startsWith(`${prefix}/claude-opus-`)) || mine[0] || ''
 }
+// A qué cuentas se puede pasar desde `now`: las fijas siempre; las opcionales (priv8, pausada)
+// sólo si el CPAM expone algún Claude con su prefijo.
+export const acctOptions = (now: string, ids: readonly string[]) =>
+  ACCOUNTS.filter((a) => a.id !== now && (!a.optional || ids.some((x) => x.startsWith(`${a.id}/claude-`))))
 const acctNow = () => acctFor({ configDir, home, cpam: mdlCpam, model })
 const acctName = (id: string) => (emails[id] || mdl.emails[id] || id).split('@')[0]
 const acctToggle = ($: any) => {
@@ -609,13 +621,14 @@ async function loadEmails($: any) {
 async function switchAccount($: any, id: string) {
   // En el mismo pane y la misma conversación: cierra este Claude y lo retoma ahí con la otra cuenta.
   acctNote = working ? 'esperá a que termine el turno' : (!paneId && !hcId) || !sessionId ? 'sólo se puede dentro de herdr' : ''
-  if (!acctNote && id === 'priv8' && !mdl.ids.length) await refreshModels($, true)
-  let target = id === 'priv8' ? priv8Pick(mdl.ids, model) : ''
-  if (!acctNote && id === 'priv8' && !target) {
+  const cpam = ACCOUNTS.some((a) => a.id === id && !a.conf)
+  if (!acctNote && cpam && !mdl.ids.length) await refreshModels($, true)
+  let target = cpam ? cpamPick(mdl.ids, id, model) : ''
+  if (!acctNote && cpam && !target) {
     await refreshModels($, true) // la lista cacheada puede ser de antes del prefix
-    target = priv8Pick(mdl.ids, model)
+    target = cpamPick(mdl.ids, id, model)
   }
-  if (!acctNote && id === 'priv8' && !target) acctNote = mdl.ids.length ? 'el CPAM no expone priv8/ — falta el prefix' : mdl.err || 'el CPAM no respondió'
+  if (!acctNote && cpam && !target) acctNote = mdl.ids.length ? `el CPAM no expone ${id}/ — falta el prefix` : mdl.err || 'el CPAM no respondió'
   if (!acctNote) {
     await relaunchHere($, target)
     acctNote = mdlNote.startsWith('⚠') ? mdlNote : `${acctName(id)}: ${mdlNote}`
@@ -2364,7 +2377,7 @@ function draw($: any, e: any) {
     if (acctNow()) {
       acctRows.push(kvBtn([span('CUENTA ', C.muted), span(clip(acctName(acctNow()), w - 18), C.text, { bold: true })], Button({ key: 'acct-menu', label: acctMenu ? '▴' : 'cambiar ▾', plain: true, dimColor: !acctMenu, onPress: () => acctToggle($) })))
       if (acctMenu)
-        for (const a of ACCOUNTS.filter((x) => x.id !== acctNow()))
+        for (const a of acctOptions(acctNow(), mdl.ids))
           acctRows.push(Box({ key: 'acct-' + a.id, flexDirection: 'row', children: [t([span('  → ', C.dim)]), Button({ key: 'acct-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) })] }))
       if (acctNote) acctRows.push(t([span('  ' + acctNote, C.amber)]))
     }
@@ -4166,7 +4179,7 @@ for _ in range(40):
 export const transcriptPath = (base: string, cwd: string, sid: string) => `${base}/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${sid}.jsonl`
 
 // ── Línea NERV bajo el prompt: cuenta, modelo, contexto y datos de un vistazo ──
-// Cuenta de la sesión. Por el CPAM: el prefijo del modelo (ag3/, wibond/, nan/, priv8/…) y su
+// Cuenta de la sesión. Por el CPAM: el prefijo del modelo (gon/, wibond/, ds/, ag3/…) y su
 // email (de los json de auth del CPAM). Directa: el config dir de Claude Code (personal = ~/.claude).
 export const acctBadge = (o: { model: string; cpam: boolean; configDir: string; home: string; emails: Record<string, string>; directEmail?: string }) => {
   const local = (m?: string) => clip(String(m || '').split('@')[0], 14)
@@ -5263,7 +5276,7 @@ export function register(on: any) {
     ramTotal = ((unit || '').match(/JCODE_RAIL_RAM_TOTAL=(\d+)/) || [])[1] || ''
     take(await $.session.usage().catch(() => undefined))
     await $.command
-      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: (orqOn ? '[orq | ' : '[') + 'quiet | on | prs | cuenta <personal|dev> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | modelos | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
+      .register({ name: 'nerv', description: 'Barra NERV: abrir, /nerv quiet para apagarla, /nerv prs para refrescar PRs, /nerv tema <unidad>', argumentHint: (orqOn ? '[orq | ' : '[') + 'quiet | on | prs | cuenta <personal|gon> | magi | git | hw | vivo | forge | cortex | yt [búsqueda] | modelos | tema <eva01|eva00|eva02|eva08|mark06>]', immediate: true })
       .catch(() => undefined)
     await refreshLocal($)
     if (sessionId) await loadRecap($)
@@ -5328,7 +5341,8 @@ export function register(on: any) {
     if (arg.startsWith('cuenta')) {
       const id = arg.split(/\s+/)[1] || ''
       if (!acctNow()) return { text: 'esta sesión no tiene otra cuenta a la que cambiar' }
-      if (!ACCOUNTS.some((x) => x.id === id) || id === acctNow()) return { text: `uso: /nerv cuenta <${ACCOUNTS.filter((x) => x.id !== acctNow()).map((x) => x.id).join('|')}> · ahora: ${acctName(acctNow())}` }
+      const opts = acctOptions(acctNow(), mdl.ids)
+      if (!opts.some((x) => x.id === id)) return { text: `uso: /nerv cuenta <${opts.map((x) => x.id).join('|')}> · ahora: ${acctName(acctNow())}` }
       await switchAccount($, id)
       return { text: `NERV: ${acctNote}` }
     }
@@ -5657,7 +5671,7 @@ export function register(on: any) {
       const rows: any[] = [Box({ key: 'band-top', flexDirection: 'row', children: top })]
       if (acctNow() && acctMenu) {
         const opts: any[] = [Text({ color: C.dim, children: ['  cambiar a → '] })]
-        for (const a of ACCOUNTS.filter((x) => x.id !== acctNow())) opts.push(Button({ key: 'band-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) }))
+        for (const a of acctOptions(acctNow(), mdl.ids)) opts.push(Button({ key: 'band-go-' + a.id, label: `${acctName(a.id)} · ${a.tag}`, plain: true, onPress: () => void switchAccount($, a.id) }))
         if (acctNote) opts.push(Text({ color: C.amber, children: ['  ' + acctNote] }))
         rows.push(Box({ key: 'band-menu', flexDirection: 'row', children: opts }))
       }

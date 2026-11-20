@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, priv8Pick, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqPerfilGrupos, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, cpamPick, acctOptions, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqPerfilGrupos, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -936,7 +936,7 @@ test('MAGI: cambiar de cuenta retoma la misma conversación en el mismo pane aun
   mock.store(on)
   on('fs.read', async () => ({ value: '' }))
   on('session.id', async () => ({ value: 's1' }))
-  on('session.model', async () => ({ value: 'priv8/claude-opus-5-5' }))
+  on('session.model', async () => ({ value: 'gon/claude-opus-5-5' }))
   // Arrancó en /h (el transcript está en projects/-h/s1.jsonl) y ahora trabaja en /h/proj.
   on('session.cwd', async () => ({ value: '/h/proj' }))
   const spawned: string[][] = []
@@ -961,6 +961,7 @@ test('MAGI: cambiar de cuenta retoma la misma conversación en el mismo pane aun
   const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
   for (let i = 0; i < 50 && !JSON.stringify(await m.drawn()).includes('"acct-menu"'); i++) await new Promise((r) => setTimeout(r, 10))
   await m.press({ key: 'acct-menu' })
+  expect(await m.find({ key: 'acct-go-priv8' })).toBeUndefined()
   await m.press({ key: 'acct-go-personal' })
   for (let i = 0; i < 50 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
   expect(lookups.length).toBeGreaterThan(0)
@@ -1020,30 +1021,46 @@ test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el
   expect(JSON.parse(settings).effortLevel).toBe('high')
 })
 
-test('CUENTA: personal directo, priv8 por el CPAM, y Wibond u otro prefijo sin menú', () => {
+test('CUENTA: personal directo, gon (o priv8) por el CPAM, y Wibond u otro prefijo sin menú', () => {
   const h = '/h'
   expect(acctFor({ configDir: '', home: h, cpam: false, model: 'claude-opus-5-5' })).toBe('personal')
-  expect(acctFor({ configDir: '/h/.claude', home: h, cpam: true, model: 'priv8/claude-opus-5-5' })).toBe('priv8')
+  expect(acctFor({ configDir: '/h/.claude', home: h, cpam: true, model: 'gon/claude-opus-5-5' })).toBe('gon')
+  expect(acctFor({ configDir: '', home: h, cpam: true, model: 'priv8/claude-opus-5-5' })).toBe('priv8')
   expect(acctFor({ configDir: '', home: h, cpam: true, model: 'ag/claude-opus-5-5' })).toBe('')
+  expect(acctFor({ configDir: '', home: h, cpam: true, model: 'ds/deepseek-v4-pro' })).toBe('')
   expect(acctFor({ configDir: '/h/.claude-wibond', home: h, cpam: false, model: 'claude-opus-5-5' })).toBe('')
-  expect(acctFor({ configDir: '/h/.claude-wibond', home: h, cpam: true, model: 'priv8/claude-opus-5-5' })).toBe('')
+  expect(acctFor({ configDir: '/h/.claude-wibond', home: h, cpam: true, model: 'gon/claude-opus-5-5' })).toBe('')
 })
 
-test('CUENTA: priv8 usa el mismo Claude si lo tiene, si no el mismo tipo, si no el opus más nuevo', () => {
-  const ids = ['ag/claude-opus-5-5', 'priv8/claude-opus-4-7', 'priv8/claude-opus-5-5', 'priv8/claude-sonnet-4-6', 'priv8/claude-sonnet-5']
-  expect(priv8Pick(ids, 'claude-opus-5-5')).toBe('priv8/claude-opus-5-5')
-  expect(priv8Pick(ids, 'claude-opus-4-7[1m]')).toBe('priv8/claude-opus-4-7')
-  expect(priv8Pick(ids, 'sonnet')).toBe('priv8/claude-sonnet-5')
-  expect(priv8Pick(ids, 'claude-haiku-4-5')).toBe('priv8/claude-opus-5-5')
-  expect(priv8Pick(ids, '')).toBe('priv8/claude-opus-5-5')
-  expect(priv8Pick(['ag/claude-opus-5-5', 'nan/qwen3.6'], 'claude-opus-5-5')).toBe('')
+test('CUENTA: gon usa el mismo Claude si lo tiene, si no el mismo tipo, si no el opus más nuevo', () => {
+  const ids = ['ag/claude-opus-5-5', 'gon/claude-opus-4-7', 'gon/claude-opus-5-5', 'gon/claude-sonnet-4-6', 'gon/claude-sonnet-5', 'priv8/claude-haiku-4-5']
+  expect(cpamPick(ids, 'gon', 'claude-opus-5-5')).toBe('gon/claude-opus-5-5')
+  expect(cpamPick(ids, 'gon', 'claude-opus-4-7[1m]')).toBe('gon/claude-opus-4-7')
+  expect(cpamPick(ids, 'gon', 'sonnet')).toBe('gon/claude-sonnet-5')
+  expect(cpamPick(ids, 'gon', 'claude-haiku-4-5')).toBe('gon/claude-opus-5-5')
+  expect(cpamPick(ids, 'gon', '')).toBe('gon/claude-opus-5-5')
+  expect(cpamPick(['ag/claude-opus-5-5', 'nan/qwen3.6'], 'gon', 'claude-opus-5-5')).toBe('')
+  // Desde priv8/ se pasa a gon/ con el mismo modelo, sin arrastrar el prefijo viejo.
+  expect(cpamPick(ids, 'gon', 'priv8/claude-sonnet-4-6')).toBe('gon/claude-sonnet-4-6')
+})
+
+test('CUENTA: el menú ofrece personal y gon; priv8 (pausada) sólo si el CPAM expone priv8/', () => {
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id)
+  const sinPriv8 = ['gon/claude-opus-5-5', 'wibond/claude-opus-5-5', 'ds/deepseek-v4-pro']
+  expect(ids(acctOptions('personal', sinPriv8))).toEqual(['gon'])
+  expect(ids(acctOptions('gon', sinPriv8))).toEqual(['personal'])
+  expect(ids(acctOptions('personal', []))).toEqual(['gon'])
+  expect(ids(acctOptions('personal', [...sinPriv8, 'priv8/claude-opus-5-5']))).toEqual(['gon', 'priv8'])
+  expect(ids(acctOptions('priv8', [...sinPriv8, 'priv8/claude-opus-5-5']))).toEqual(['personal', 'gon'])
+  // Una sesión que quedó en priv8/ con la cuenta pausada igual puede volver a personal o a gon.
+  expect(ids(acctOptions('priv8', sinPriv8))).toEqual(['personal', 'gon'])
 })
 
 test('CPAM: la firma cambia al sumar un prefix o tocar el config.yaml, no por el orden de los archivos', () => {
   const a: { name: string; prefix?: string }[] = [{ name: 'claude-a.json', prefix: 'ag' }, { name: 'claude-b.json' }]
   const conf = { mtimeMs: 1, size: 10 }
   expect(cpamSig(a, conf)).toBe(cpamSig([...a].reverse(), conf))
-  expect(cpamSig([a[0]!, { name: 'claude-b.json', prefix: 'priv8' }], conf)).not.toBe(cpamSig(a, conf))
+  expect(cpamSig([a[0]!, { name: 'claude-b.json', prefix: 'gon' }], conf)).not.toBe(cpamSig(a, conf))
   expect(cpamSig(a, { mtimeMs: 2, size: 10 })).not.toBe(cpamSig(a, conf))
   expect(cpamSig(a)).toBe('claude-a.json=ag,claude-b.json=|0:0')
 })
@@ -2105,13 +2122,13 @@ const OM_JSON = {
   efforts: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
   config: {
     '*': { modelo: 'sonnet', effort: 'medium', origen: 'tipo' },
-    backend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    backend: { modelo: 'gon/claude-opus-5-5', effort: 'high', origen: 'tipo' },
     coding: { modelo: 'sonnet', effort: 'medium', origen: 'default' },
     frontend: { modelo: 'wibond/claude-opus-5-5', effort: '', origen: 'tipo' },
   },
   aliases: ['opus', 'sonnet', 'haiku', 'fable'],
 }
-const OM_IDS = ['priv8/claude-opus-5-5', 'priv8/claude-sonnet-5-5', 'priv8/claude-opus-4-8', 'priv8/claude-haiku-5-5', 'priv8/claude-fable-5-2', 'priv8/claude-3-5-haiku-20241022', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
+const OM_IDS = ['gon/claude-opus-5-5', 'gon/claude-sonnet-5-5', 'gon/claude-opus-4-8', 'gon/claude-haiku-5-5', 'gon/claude-fable-5-2', 'gon/claude-3-5-haiku-20241022', 'wibond/claude-opus-5-5', 'ag3/gemini-3.8-flash-high', 'claude-sonnet-5', ...Array.from({ length: 13 }, (_, i) => `nan/m${i}`)]
 // Perfiles simulados con estado, como los guarda orq: usar/guardar/duplicar/borrar cambian lo que se relee después.
 const OP_FABRICA = [
   { nombre: 'turbo', descripcion: 'Lo más rápido.', config: {} },
@@ -2202,7 +2219,7 @@ const omRuns = (asked: string[][], verbo: string) => asked.filter((a) => a[0] ==
 test('orqModelosParse lee el contrato y completa lo que falta; orqMdlCuentas deja sólo las cuentas con prefijo', () => {
   const p = orqModelosParse(JSON.stringify(OM_JSON))!
   expect(p.tipos).toEqual(['backend', 'coding', 'frontend'])
-  expect(p.config.backend).toEqual({ modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' })
+  expect(p.config.backend).toEqual({ modelo: 'gon/claude-opus-5-5', effort: 'high', origen: 'tipo' })
   expect(p.config.frontend.effort).toBe('')
   const flaco = orqModelosParse(JSON.stringify({ tipos: ['a', '*'], config: { a: { origen: 'raro' } } }))!
   expect(flaco.tipos).toEqual(['a'])
@@ -2230,7 +2247,7 @@ test('MODELOS de orq: la lista muestra cada tipo con su modelo, effort y de dón
   expect(await m.find({ key: 'tab-magi' })).toBeUndefined()
   expect(text).toContain('* default para todos')
   expect(text.indexOf('om-t-*')).toBeLessThan(text.indexOf('om-t-backend'))
-  for (const s of ['priv8/claude-opus-5-5 · high', 'sonnet · medium', 'propio', 'default', '⚠ wibond/claude-opus-5-5 · auto']) expect(text).toContain(s)
+  for (const s of ['gon/claude-opus-5-5 · high', 'sonnet · medium', 'propio', 'default', '⚠ wibond/claude-opus-5-5 · auto']) expect(text).toContain(s)
   // Volver a ORQ deja ver el flujo de nuevo.
   await m.press({ key: 'flap-orq' })
   expect(await m.find({ key: 'orq-flow' })).toBeDefined()
@@ -2243,7 +2260,7 @@ test('MODELOS de orq: cuenta → modelo → effort termina en el argv exacto de 
   await m.press({ key: 'orqtab-modelos' })
   await hasta('om-t-coding')
   await m.press({ key: 'om-t-coding' })
-  await hasta('om-c-priv8')
+  await hasta('om-c-gon')
   let text = await texto()
   expect(text).toContain('paso 1 · cuenta')
   expect(text).toContain('Claude (tu plan)')
@@ -2253,23 +2270,23 @@ test('MODELOS de orq: cuenta → modelo → effort termina en el argv exacto de 
   expect(text).not.toContain('om-c-claude-sonnet')
   // coding sale del default: no hay nada propio que borrar.
   expect(await m.find({ key: 'om-reset' })).toBeUndefined()
-  await m.press({ key: 'om-c-priv8' })
+  await m.press({ key: 'om-c-gon' })
   text = await texto()
   expect(text).toContain('paso 2 · modelo')
   expect(await m.find({ key: 'om-q' })).toBeUndefined()
-  await m.press({ key: 'om-m-priv8/claude-sonnet-5-5' })
+  await m.press({ key: 'om-m-gon/claude-sonnet-5-5' })
   text = await texto()
   expect(text).toContain('paso 3 · effort')
   for (const lvl of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) expect(await m.find({ key: 'om-e-' + lvl })).toBeDefined()
   // ‹ volver retrocede un paso por vez.
   await m.press({ key: 'om-back' })
   expect(await texto()).toContain('paso 2 · modelo')
-  await m.press({ key: 'om-m-priv8/claude-sonnet-5-5' })
+  await m.press({ key: 'om-m-gon/claude-sonnet-5-5' })
   await m.press({ key: 'om-e-xhigh' })
   await hasta('om-list')
-  expect(omRuns(asked, 'set')).toEqual([['orq', 'modelos', 'set', 'coding', '--modelo', 'priv8/claude-sonnet-5-5', '--effort', 'xhigh']])
+  expect(omRuns(asked, 'set')).toEqual([['orq', 'modelos', 'set', 'coding', '--modelo', 'gon/claude-sonnet-5-5', '--effort', 'xhigh']])
   text = await texto()
-  expect(text).toContain('✓ guardado: coding → priv8/claude-sonnet-5-5 · xhigh')
+  expect(text).toContain('✓ guardado: coding → gon/claude-sonnet-5-5 · xhigh')
   // Después de guardar relee lo que quedó.
   expect(asked.filter((a) => a.join(' ') === 'orq modelos --json').length).toBeGreaterThanOrEqual(2)
   // Con el plan de Claude: los alias, y "* default para todos" guarda en "*".
@@ -2347,7 +2364,7 @@ test('MODELOS de orq: la cuenta wibond avisa en rojo que es la de TRABAJO en cad
   // En otra cuenta el aviso no aparece.
   await m.press({ key: 'om-back' })
   await m.press({ key: 'om-back' })
-  await m.press({ key: 'om-c-priv8' })
+  await m.press({ key: 'om-c-gon' })
   expect(await texto()).not.toContain('cuenta de TRABAJO')
 })
 
@@ -2531,7 +2548,7 @@ test('PERFILES de orq: si orq perfiles --json no contesta lo dice y la lista de 
   await opListo(texto, '✗ orq perfiles --json no contestó')
   expect(await m.find({ key: 'op-save' })).toBeUndefined()
   await m.press({ key: 'om-t-backend' })
-  await hasta('om-c-priv8')
+  await hasta('om-c-gon')
 })
 
 // Atajos de un click: chips de modelo y effort en cada fila, filas por rol y perfiles agrupados.
@@ -2539,12 +2556,12 @@ const label = async (m: any, key: string) => String((await m.find({ key }))?.pro
 const notaLista = async (texto: () => Promise<string>, aguja: string) => opListo(texto, aguja)
 
 test('orqMdlRapidos: los 4 de la misma cuenta, el más nuevo de cada uno; sin cuenta, los alias', () => {
-  const ids = [...OM_IDS, 'ag3/claude-opus-4-6-thinking', 'ag3/claude-sonnet-4-6', 'priv8/claude-opus-5-5-thinking']
-  expect(orqMdlRapidos('priv8/claude-opus-4-8', ids, ['opus', 'sonnet', 'haiku', 'fable'])).toEqual([
-    { id: 'priv8/claude-opus-5-5', label: 'opus' },
-    { id: 'priv8/claude-sonnet-5-5', label: 'sonnet' },
-    { id: 'priv8/claude-haiku-5-5', label: 'haiku' },
-    { id: 'priv8/claude-fable-5-2', label: 'fable' },
+  const ids = [...OM_IDS, 'ag3/claude-opus-4-6-thinking', 'ag3/claude-sonnet-4-6', 'gon/claude-opus-5-5-thinking']
+  expect(orqMdlRapidos('gon/claude-opus-4-8', ids, ['opus', 'sonnet', 'haiku', 'fable'])).toEqual([
+    { id: 'gon/claude-opus-5-5', label: 'opus' },
+    { id: 'gon/claude-sonnet-5-5', label: 'sonnet' },
+    { id: 'gon/claude-haiku-5-5', label: 'haiku' },
+    { id: 'gon/claude-fable-5-2', label: 'fable' },
   ])
   expect(orqMdlRapidos('ag3/gemini-3.8-flash-high', ids, [])).toEqual([
     { id: 'ag3/claude-opus-4-6-thinking', label: 'opus' },
@@ -2552,8 +2569,8 @@ test('orqMdlRapidos: los 4 de la misma cuenta, el más nuevo de cada uno; sin cu
   ])
   expect(orqMdlRapidos('nan/m1', ids, ['opus'])).toEqual([])
   for (const m of ['sonnet', 'claude-opus-5', '']) expect(orqMdlRapidos(m, ids, ['opus', 'sonnet']).map((x) => x.id)).toEqual(['opus', 'sonnet'])
-  expect(orqMdlCuentaComun(['priv8/a', 'sonnet', 'priv8/b', 'ag3/c'])).toBe('priv8')
-  expect(orqMdlCuentaComun(['sonnet', 'priv8/b'])).toBe('')
+  expect(orqMdlCuentaComun(['gon/a', 'sonnet', 'gon/b', 'ag3/c'])).toBe('gon')
+  expect(orqMdlCuentaComun(['sonnet', 'gon/b'])).toBe('')
   expect(orqModelosSetUno('*', 'effort', 'low')).toEqual(['orq', 'modelos', 'set', '*', '--effort', 'low'])
 })
 
@@ -2581,24 +2598,24 @@ test('MODELOS de orq: un click en un effort corre orq modelos set <tipo> --effor
 test('MODELOS de orq: un click en un modelo rápido corre orq modelos set <tipo> --modelo y deja el effort', async ($, on) => {
   const { m, asked, hasta, texto } = await omSession($, on)
   await enModelos(m, hasta)
-  // backend está en priv8: sus atajos son los 4 de priv8 (el opus más nuevo, no el 4-8).
-  for (const [id, lbl] of [['priv8/claude-opus-5-5', '◆ opus'], ['priv8/claude-sonnet-5-5', 'sonnet'], ['priv8/claude-haiku-5-5', 'haiku'], ['priv8/claude-fable-5-2', 'fable']])
+  // backend está en gon: sus atajos son los 4 de gon (el opus más nuevo, no el 4-8).
+  for (const [id, lbl] of [['gon/claude-opus-5-5', '◆ opus'], ['gon/claude-sonnet-5-5', 'sonnet'], ['gon/claude-haiku-5-5', 'haiku'], ['gon/claude-fable-5-2', 'fable']])
     expect(await label(m, 'om-q-backend-m-' + id)).toBe(lbl)
-  expect(await m.find({ key: 'om-q-backend-m-priv8/claude-opus-4-8' })).toBeUndefined()
+  expect(await m.find({ key: 'om-q-backend-m-gon/claude-opus-4-8' })).toBeUndefined()
   // coding usa un alias (sonnet): sus atajos son los alias.
   expect(await label(m, 'om-q-coding-m-sonnet')).toBe('◆ sonnet')
   expect(await label(m, 'om-q-coding-m-opus')).toBe('opus')
-  await m.press({ key: 'om-q-backend-m-priv8/claude-sonnet-5-5' })
-  await notaLista(texto, '✓ backend → priv8/claude-sonnet-5-5')
+  await m.press({ key: 'om-q-backend-m-gon/claude-sonnet-5-5' })
+  await notaLista(texto, '✓ backend → gon/claude-sonnet-5-5')
   await m.press({ key: 'om-q-coding-m-haiku' })
   await notaLista(texto, '✓ coding → haiku')
   expect(omRuns(asked, 'set')).toEqual([
-    ['orq', 'modelos', 'set', 'backend', '--modelo', 'priv8/claude-sonnet-5-5'],
+    ['orq', 'modelos', 'set', 'backend', '--modelo', 'gon/claude-sonnet-5-5'],
     ['orq', 'modelos', 'set', 'coding', '--modelo', 'haiku'],
   ])
   // ⋯ otro modelo abre el flujo completo de ese tipo.
   await m.press({ key: 'om-q-coding-otro' })
-  await hasta('om-c-priv8')
+  await hasta('om-c-gon')
   expect(await texto()).toContain('paso 1 · cuenta')
 })
 
@@ -2614,11 +2631,11 @@ const OM_ROLES = {
   ...OM_JSON,
   tipos: ['backend', 'coding', 'frontend', 'research', 'docs', 'review', 'security'],
   config: {
-    '*': { modelo: 'priv8/claude-opus-5-5', effort: 'medium', origen: 'tipo' },
-    backend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
-    coding: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
-    frontend: { modelo: 'priv8/claude-opus-5-5', effort: 'high', origen: 'tipo' },
-    research: { modelo: 'priv8/claude-sonnet-5-5', effort: 'low', origen: 'tipo' },
+    '*': { modelo: 'gon/claude-opus-5-5', effort: 'medium', origen: 'tipo' },
+    backend: { modelo: 'gon/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    coding: { modelo: 'gon/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    frontend: { modelo: 'gon/claude-opus-5-5', effort: 'high', origen: 'tipo' },
+    research: { modelo: 'gon/claude-sonnet-5-5', effort: 'low', origen: 'tipo' },
     docs: { modelo: 'sonnet', effort: 'medium', origen: 'tipo' },
     review: { modelo: 'opus', effort: 'max', origen: 'tipo' },
     security: { modelo: 'opus', effort: 'max', origen: 'tipo' },
@@ -2634,15 +2651,15 @@ test('MODELOS de orq: "cambiar todos los de…" aplica el modelo o el effort a c
   expect(text.indexOf('om-rol-construir')).toBeLessThan(text.indexOf('om-t-*'))
   // Resaltado sólo si todos los del rol lo tienen.
   expect(await label(m, 'om-r-construir-e-high')).toBe('◆ high')
-  expect(await label(m, 'om-r-construir-m-priv8/claude-opus-5-5')).toBe('◆ opus')
+  expect(await label(m, 'om-r-construir-m-gon/claude-opus-5-5')).toBe('◆ opus')
   expect(await label(m, 'om-r-leer-e-low')).toBe('low')
   // pensar está con alias: sus atajos son los alias.
   expect(await label(m, 'om-r-pensar-m-opus')).toBe('◆ opus')
-  // leer mezcla priv8 y alias: gana la cuenta más repetida (empate → la primera).
-  expect(await m.find({ key: 'om-r-leer-m-priv8/claude-haiku-5-5' })).toBeDefined()
-  await m.press({ key: 'om-r-construir-m-priv8/claude-sonnet-5-5' })
-  await notaLista(texto, '✓ construir (3) → priv8/claude-sonnet-5-5')
-  expect(omRuns(asked, 'set')).toEqual(['coding', 'frontend', 'backend'].map((tp) => ['orq', 'modelos', 'set', tp, '--modelo', 'priv8/claude-sonnet-5-5']))
+  // leer mezcla gon y alias: gana la cuenta más repetida (empate → la primera).
+  expect(await m.find({ key: 'om-r-leer-m-gon/claude-haiku-5-5' })).toBeDefined()
+  await m.press({ key: 'om-r-construir-m-gon/claude-sonnet-5-5' })
+  await notaLista(texto, '✓ construir (3) → gon/claude-sonnet-5-5')
+  expect(omRuns(asked, 'set')).toEqual(['coding', 'frontend', 'backend'].map((tp) => ['orq', 'modelos', 'set', tp, '--modelo', 'gon/claude-sonnet-5-5']))
   await m.press({ key: 'om-r-pensar-e-xhigh' })
   await notaLista(texto, '✓ pensar (2) · effort xhigh')
   expect(omRuns(asked, 'set').slice(3)).toEqual(['review', 'security'].map((tp) => ['orq', 'modelos', 'set', tp, '--effort', 'xhigh']))
