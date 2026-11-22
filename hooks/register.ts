@@ -4453,8 +4453,19 @@ async function relaunchWith($: any, id: string) {
 
 async function useHere($: any, id: string) {
   mdlNoteFor = id
-  mdlNote = `cambiando a ${id}…`
-  $.ui.invalidate('ui.render')
+  const say = (s: string) => ((mdlNote = s), $.ui.invalidate('ui.render'))
+  if (working) return say('⚠ esperá a que termine el turno')
+  // `$.command.run` se rechaza con la sesión parada ("the session was stopped and nobody has sent
+  // in"): un /model encolado necesita un turno del que colgarse y en reposo no hay. Se tipea /model
+  // en el prompt del pane (eso SÍ "manda input"), igual que "cambiar acá" manda sus comandos.
+  // En la Herdr app no hay HERDR_PANE_ID: la terminal es la de HC_TERMINAL_ID y se maneja con `hc`.
+  const app = !paneId && !!hcId
+  const term = paneId || hcId
+  if (!term) return say('⚠ sólo se puede dentro de herdr')
+  const read = app ? ['hc', 'read', hcId] : ['herdr', 'pane', 'read', paneId, '--source', 'visible', '--format', 'text']
+  const screen = (await $.process.run(read, { timeoutMs: 5000 }).catch(() => undefined))?.stdout || ''
+  // Tipear /model pega en el prompt: si hay un borrador a medio escribir, no lo pisamos.
+  if (promptDraft(String(screen))) return say('⚠ tenés texto en el prompt: mandalo o borralo y volvé a tocar')
   // /model además guarda el id como default de TODAS las sesiones nuevas; un id del CPAM ahí
   // rompe las sesiones directas a Anthropic, así que después se devuelve el default que había.
   const sp = `${configDir || home + '/.claude'}/settings.json`
@@ -4466,21 +4477,33 @@ async function useHere($: any, id: string) {
     }
   }
   const prev = prevOf(await $.fs.read(sp).catch(() => undefined))
-  const r = await $.command.run({ command: 'model', args: id }).catch((err: any) => ({ text: '✖ ' + String(err?.message || err) }))
+  say(`cambiando a ${id}…`)
+  const sent = app
+    ? await $.process.run(['hc', 'send', term, `/model ${id}`], { timeoutMs: 5000 }).catch(() => undefined)
+    : await (async () => {
+        const a = await $.process.run(['herdr', 'pane', 'send-text', term, `/model ${id}`], { timeoutMs: 5000 }).catch(() => undefined)
+        return a?.exitCode === 0 ? await $.process.run(['herdr', 'pane', 'send-keys', term, 'enter'], { timeoutMs: 5000 }).catch(() => undefined) : a
+      })()
+  if (sent?.exitCode !== 0) return say('⚠ no pude mandar /model al prompt: quedó como estaba')
+  // /model corre en el loop principal; esperamos a que persista el default para devolverlo.
   if (prev.ok) {
-    try {
-      const j = JSON.parse(String(await $.fs.read(sp)))
-      if (j.model !== prev.model) {
-        if (prev.model === undefined) delete j.model
-        else j.model = prev.model
-        await $.fs.write(sp, JSON.stringify(j, null, 2) + '\n')
-      }
-    } catch {}
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 150))
+      try {
+        const j = JSON.parse(String(await $.fs.read(sp)))
+        if (j.model !== prev.model) {
+          if (prev.model === undefined) delete j.model
+          else j.model = prev.model
+          await $.fs.write(sp, JSON.stringify(j, null, 2) + '\n')
+          break
+        }
+      } catch {}
+    }
   }
   model = await $.session.model().catch(() => model)
-  mdlNote = clip(String(r?.text || `/model ${id}`).split('\n')[0] || '', 70)
+  const base = String(model || '').replace(/\[.*\]$/, '')
+  say(base === String(id).replace(/\[.*\]$/, '') ? `✓ ${shortModel(id)}` : `✓ /model ${mdlSplit(id).name} enviado al prompt`)
   mdlPick = ''
-  $.ui.invalidate('ui.render')
 }
 
 function drawModels($: any, e: any, out: any[], h: any) {

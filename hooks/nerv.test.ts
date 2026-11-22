@@ -989,24 +989,37 @@ test('MODELOS: flags que se repiten al reabrir y prompt vacío leído de la pant
   expect(mdlGroups(['ds/deepseek-v4-pro', 'nan/deepseek-v4-flash']).map((g) => g.label)).toEqual(['NaN', 'DeepSeek (API oficial)'])
 })
 
-test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el default de settings.json', async ($, on) => {
-  mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' })
+// En reposo `$.command.run({command:'model'})` se rechaza ("the session was stopped and nobody has
+// sent in"): "usar acá" tipea /model en el prompt del pane (con hc en la Herdr app). Después /model
+// guarda el id como default en settings.json y NERV devuelve el que había (un id del CPAM ahí rompe
+// las sesiones directas a Anthropic).
+test('MODELOS: por el CPAM "usar acá" tipea /model en el prompt (hc) y devuelve el default de settings.json', async ($, on) => {
+  mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HC_TERMINAL_ID: 't3h' })
   mock.store(on)
   let settings = JSON.stringify({ effortLevel: 'high' }, null, 2) + '\n'
+  let modelNow = 'gon/claude-opus-5-5'
   on('fs.read', async (_$: any, e: any) => ({ value: e.path === '/h/.claude/settings.json' ? settings : '' }))
   on('fs.write', async (_$: any, e: any) => {
     if (e.path === '/h/.claude/settings.json') settings = e.text
     return { value: undefined }
   })
-  on('process.run', async (_$: any, e: any) =>
-    e.argv[0] === 'sh' ? { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } } : { value: { exitCode: 1, stdout: '', stderr: '' } },
-  )
-  const asked: string[] = []
-  on('command.run', { command: 'model' }, async (_$: any, e: any) => {
-    asked.push(e.args)
-    settings = JSON.stringify({ ...JSON.parse(settings), model: e.args }, null, 2) + '\n'
-    return { text: `Set model to ${e.args}` }
+  on('session.model', async () => ({ value: modelNow }))
+  const sent: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh') return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'read') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0\n', stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'send') {
+      sent.push(a)
+      // /model cambia el modelo vivo y lo guarda como default: NERV lo tiene que revertir.
+      modelNow = 'nan/qwen3.8-flash'
+      settings = JSON.stringify({ ...JSON.parse(settings), model: 'nan/qwen3.8-flash' }, null, 2) + '\n'
+      return { value: { exitCode: 0, stdout: '', stderr: '' } }
+    }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
   })
+  const asked: string[] = []
+  on('command.run', { command: 'model' }, async (_$: any, e: any) => (asked.push(e.args), { text: '' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
   await $.command.run({ command: 'nerv', args: 'modelos' })
@@ -1014,11 +1027,39 @@ test('MODELOS: en una sesión por el CPAM "usar acá" corre /model y devuelve el
   expect(JSON.stringify(await m.drawn())).toContain('CPAM 8317')
   await m.press({ key: 'mdl-nan/qwen3.8-flash' })
   await m.press({ key: 'mdl-here' })
-  for (let i = 0; i < 20 && !asked.length; i++) await new Promise((r) => setTimeout(r, 10))
-  await new Promise((r) => setTimeout(r, 20))
-  expect(asked).toEqual(['nan/qwen3.8-flash'])
+  for (let i = 0; i < 80 && !JSON.stringify(await m.drawn()).includes('✓'); i++) await new Promise((r) => setTimeout(r, 10))
+  // Nunca pasa por $.command.run: lo tipea en el prompt.
+  expect(asked).toEqual([])
+  expect(sent.length).toBe(1)
+  expect(sent[0]![2]).toBe('t3h')
+  expect(sent[0]![3]).toBe('/model nan/qwen3.8-flash')
+  // El default vuelve a lo que había (sin model), el effort queda.
   expect(JSON.parse(settings).model).toBeUndefined()
   expect(JSON.parse(settings).effortLevel).toBe('high')
+})
+
+test('MODELOS: "usar acá" por el CPAM no pisa un borrador escrito en el prompt', async ($, on) => {
+  mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HC_TERMINAL_ID: 't3h' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  const sent: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh') return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'read') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0un pedido a medio escribir\n', stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'send') return (sent.push(a), { value: { exitCode: 0, stdout: '', stderr: '' } })
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.command.run({ command: 'nerv', args: 'modelos' })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'Pane', requestId: 'nerv', props: PANE_PROPS })
+  await m.drawn()
+  await m.press({ key: 'mdl-nan/qwen3.8-flash' })
+  await m.press({ key: 'mdl-here' })
+  for (let i = 0; i < 50 && !JSON.stringify(await m.drawn()).includes('texto en el prompt'); i++) await new Promise((r) => setTimeout(r, 10))
+  expect(JSON.stringify(await m.drawn())).toContain('texto en el prompt')
+  expect(sent.length).toBe(0)
 })
 
 test('CUENTA: personal directo, gon (o priv8) por el CPAM, y Wibond u otro prefijo sin menú', () => {
