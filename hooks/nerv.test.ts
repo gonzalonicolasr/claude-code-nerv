@@ -990,10 +990,12 @@ test('MODELOS: flags que se repiten al reabrir y prompt vacío leído de la pant
 })
 
 // En reposo `$.command.run({command:'model'})` se rechaza ("the session was stopped and nobody has
-// sent in"): "usar acá" tipea /model en el prompt del pane (con hc en la Herdr app). Después /model
-// guarda el id como default en settings.json y NERV devuelve el que había (un id del CPAM ahí rompe
-// las sesiones directas a Anthropic).
-test('MODELOS: por el CPAM "usar acá" tipea /model en el prompt (hc) y devuelve el default de settings.json', async ($, on) => {
+// sent in"): "usar acá" manda /model al prompt del pane (con hc en la Herdr app). Se manda DESACOPLADO
+// (setsid -f): tipeándolo desde el hook, `hc send` espera al loop de Claude —que corre el hook— y se
+// cuelga aunque el /model igual se entregue (de ahí el falso "no pude mandar"). Un loop diferido lee
+// el modelo para confirmar y devuelve el default que /model guarda (un id del CPAM ahí rompe las
+// sesiones directas a Anthropic).
+test('MODELOS: por el CPAM "usar acá" manda /model al prompt desacoplado (hc) y devuelve el default', async ($, on) => {
   mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HC_TERMINAL_ID: 't3h' })
   mock.store(on)
   let settings = JSON.stringify({ effortLevel: 'high' }, null, 2) + '\n'
@@ -1004,18 +1006,18 @@ test('MODELOS: por el CPAM "usar acá" tipea /model en el prompt (hc) y devuelve
     return { value: undefined }
   })
   on('session.model', async () => ({ value: modelNow }))
-  const sent: string[][] = []
+  const sent: string[] = []
   on('process.run', async (_$: any, e: any) => {
     const a = e.argv as string[]
-    if (a[0] === 'sh') return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
-    if (a[0] === 'hc' && a[1] === 'read') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0\n', stderr: '' } }
-    if (a[0] === 'hc' && a[1] === 'send') {
-      sent.push(a)
-      // /model cambia el modelo vivo y lo guarda como default: NERV lo tiene que revertir.
+    if (a[0] === 'sh' && String(a[2]).startsWith('setsid')) {
+      // El /model va como $0 del setsid; /model cambia el modelo vivo y lo guarda como default.
+      sent.push(String(a[3]))
       modelNow = 'nan/qwen3.8-flash'
       settings = JSON.stringify({ ...JSON.parse(settings), model: 'nan/qwen3.8-flash' }, null, 2) + '\n'
       return { value: { exitCode: 0, stdout: '', stderr: '' } }
     }
+    if (a[0] === 'sh') return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
+    if (a[0] === 'hc' && a[1] === 'read') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0\n', stderr: '' } }
     return { value: { exitCode: 1, stdout: '', stderr: '' } }
   })
   const asked: string[] = []
@@ -1027,12 +1029,10 @@ test('MODELOS: por el CPAM "usar acá" tipea /model en el prompt (hc) y devuelve
   expect(JSON.stringify(await m.drawn())).toContain('CPAM 8317')
   await m.press({ key: 'mdl-nan/qwen3.8-flash' })
   await m.press({ key: 'mdl-here' })
-  for (let i = 0; i < 80 && !JSON.stringify(await m.drawn()).includes('✓'); i++) await new Promise((r) => setTimeout(r, 10))
-  // Nunca pasa por $.command.run: lo tipea en el prompt.
+  for (let i = 0; i < 120 && !JSON.stringify(await m.drawn()).includes('✓'); i++) await new Promise((r) => setTimeout(r, 10))
+  // Nunca pasa por $.command.run: lo tipea en el prompt, con --force y desacoplado.
   expect(asked).toEqual([])
-  expect(sent.length).toBe(1)
-  expect(sent[0]![2]).toBe('t3h')
-  expect(sent[0]![3]).toBe('/model nan/qwen3.8-flash')
+  expect(sent).toEqual(["hc send --force 't3h' '/model nan/qwen3.8-flash'"])
   // El default vuelve a lo que había (sin model), el effort queda.
   expect(JSON.parse(settings).model).toBeUndefined()
   expect(JSON.parse(settings).effortLevel).toBe('high')
@@ -1042,12 +1042,12 @@ test('MODELOS: "usar acá" por el CPAM no pisa un borrador escrito en el prompt'
   mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HC_TERMINAL_ID: 't3h' })
   mock.store(on)
   on('fs.read', async () => ({ value: '' }))
-  const sent: string[][] = []
+  const sent: string[] = []
   on('process.run', async (_$: any, e: any) => {
     const a = e.argv as string[]
+    if (a[0] === 'sh' && String(a[2]).startsWith('setsid')) return (sent.push(String(a[3])), { value: { exitCode: 0, stdout: '', stderr: '' } })
     if (a[0] === 'sh') return { value: { exitCode: 0, stdout: JSON.stringify({ data: [{ id: 'nan/qwen3.8-flash' }] }), stderr: '' } }
     if (a[0] === 'hc' && a[1] === 'read') return { value: { exitCode: 0, stdout: 'algo\n❯\xa0un pedido a medio escribir\n', stderr: '' } }
-    if (a[0] === 'hc' && a[1] === 'send') return (sent.push(a), { value: { exitCode: 0, stdout: '', stderr: '' } })
     return { value: { exitCode: 1, stdout: '', stderr: '' } }
   })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
@@ -1059,7 +1059,7 @@ test('MODELOS: "usar acá" por el CPAM no pisa un borrador escrito en el prompt'
   await m.press({ key: 'mdl-here' })
   for (let i = 0; i < 50 && !JSON.stringify(await m.drawn()).includes('texto en el prompt'); i++) await new Promise((r) => setTimeout(r, 10))
   expect(JSON.stringify(await m.drawn())).toContain('texto en el prompt')
-  expect(sent.length).toBe(0)
+  expect(sent).toEqual([])
 })
 
 test('CUENTA: personal directo, gon (o priv8) por el CPAM, y Wibond u otro prefijo sin menú', () => {

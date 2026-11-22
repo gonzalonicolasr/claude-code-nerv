@@ -4477,33 +4477,39 @@ async function useHere($: any, id: string) {
     }
   }
   const prev = prevOf(await $.fs.read(sp).catch(() => undefined))
-  say(`cambiando a ${id}…`)
-  const sent = app
-    ? await $.process.run(['hc', 'send', term, `/model ${id}`], { timeoutMs: 5000 }).catch(() => undefined)
-    : await (async () => {
-        const a = await $.process.run(['herdr', 'pane', 'send-text', term, `/model ${id}`], { timeoutMs: 5000 }).catch(() => undefined)
-        return a?.exitCode === 0 ? await $.process.run(['herdr', 'pane', 'send-keys', term, 'enter'], { timeoutMs: 5000 }).catch(() => undefined) : a
-      })()
-  if (sent?.exitCode !== 0) return say('⚠ no pude mandar /model al prompt: quedó como estaba')
-  // /model corre en el loop principal; esperamos a que persista el default para devolverlo.
-  if (prev.ok) {
-    for (let i = 0; i < 12; i++) {
-      await new Promise((r) => setTimeout(r, 150))
+  // El /model se manda DESACOPLADO (setsid -f): tipeándolo desde el propio hook, `hc send` espera
+  // al loop de Claude —que está corriendo este hook— y se cuelga hasta el timeout, aunque el /model
+  // igual se entregue; así el panel decía "no pude mandar" con el cambio YA hecho. Soltándolo, el
+  // hook vuelve, el loop se libera y el ayudante entrega el /model. `--force` porque `hc send` si no
+  // rechaza un programa "blocked" (Claude en su prompt lo está).
+  const q = (s: string) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+  const sendCmd = app ? `hc send --force ${q(term)} ${q('/model ' + id)}` : `herdr pane send-text ${q(term)} ${q('/model ' + id)} && herdr pane send-keys ${q(term)} enter`
+  const run = await $.process.run(['sh', '-c', 'setsid -f sh -c "$0" >/dev/null 2>&1 </dev/null', sendCmd], { timeoutMs: 5000 }).catch(() => undefined)
+  if (run?.exitCode !== 0) return say('⚠ no pude lanzar el envío de /model: quedó como estaba')
+  say(`cambiando a ${mdlSplit(id).name}…`)
+  mdlPick = ''
+  // /model corre recién cuando este hook vuelve. Un loop diferido confirma leyendo el modelo y
+  // devuelve el default que /model guarda (un id del CPAM ahí rompe las sesiones directas a Anthropic).
+  const base = String(id).replace(/\[.*\]$/, '')
+  let tries = 0
+  const settle = async () => {
+    tries++
+    if (prev.ok) {
       try {
         const j = JSON.parse(String(await $.fs.read(sp)))
         if (j.model !== prev.model) {
           if (prev.model === undefined) delete j.model
           else j.model = prev.model
           await $.fs.write(sp, JSON.stringify(j, null, 2) + '\n')
-          break
         }
       } catch {}
     }
+    const now = String(await $.session.model().catch(() => '')).replace(/\[.*\]$/, '')
+    if (now === base) return ((model = now), say(`✓ ${shortModel(id)}`))
+    if (tries < 30) setTimeout(settle, 250)
+    else say(`se mandó /model ${mdlSplit(id).name} al prompt`)
   }
-  model = await $.session.model().catch(() => model)
-  const base = String(model || '').replace(/\[.*\]$/, '')
-  say(base === String(id).replace(/\[.*\]$/, '') ? `✓ ${shortModel(id)}` : `✓ /model ${mdlSplit(id).name} enviado al prompt`)
-  mdlPick = ''
+  setTimeout(settle, 400)
 }
 
 function drawModels($: any, e: any, out: any[], h: any) {
