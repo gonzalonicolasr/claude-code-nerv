@@ -1,5 +1,5 @@
 import { expect, test, mock } from 'claude-code/testing'
-import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, cpamPick, acctOptions, transcriptPath, cpamContexts, acctBadge, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqPerfilGrupos, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
+import { CHAT_ROWS, cardAt, chatLines, chatScroll, effortShownIn, g0nShownIn, liveChat, liveViewers, wrapCells, acctFor, cpamSig, cxCalls, cxEvent, cxHits, cxPromptKey, cxTally, cxTool, liveBattery, liveDc, liveLens, mdlDim, mdlFilter, mdlGroups, mdlLaunchCmd, mdlSplit, keepFlags, promptDraft, pngSource, missionNotify, missionWindow, cpamPick, acctOptions, transcriptPath, cpamContexts, acctBadge, cpamAutoAcct, ctxTotal, ctxGauge, shortModel, fitSegs, cellWidth, kfmt, eddParse, eddStory, eddCounts, eddActiveSlug, eddBacklog, sidePrompt, sideLines, orqParse, orqLive, orqPath, orqPulse, orqBar, orqResumen, orqDraw, orqVista, orqModelosParse, orqModelosSet, orqMdlCuentas, orqMdlError, orqPerfilesParse, orqPerfilArgv, orqPerfilLibre, orqPerfilGrupos, orqMdlRapidos, orqMdlCuentaComun, orqModelosSetUno, ytCells, ytClip } from './register'
 
 const state = async ($: any) => {
   const r = await $.command.run({ command: 'nerv', args: 'debug' })
@@ -1134,6 +1134,66 @@ test('línea bajo el prompt: la cuenta sale del prefijo del modelo por el CPAM y
   expect(acctBadge({ ...direct, configDir: '' })).toEqual({ who: 'personal', tag: 'ANTHROPIC', warn: false })
   expect(acctBadge({ ...direct, configDir: '/h/.claude/' }).who).toBe('personal')
   expect(acctBadge({ ...direct, configDir: '/h/.claude-wibond', directEmail: 'x@wibond.test' })).toEqual({ who: 'wibond·x', tag: 'ANTHROPIC', warn: true })
+})
+
+test('línea bajo el prompt: con un Claude sin prefijo el CPAM usa la cuenta claude viva de mayor priority que tenga el modelo', () => {
+  const gon = { name: 'claude-a.json', type: 'claude', prefix: 'gon', email: 'gonn.nicolas@example.com', priority: 100, status: 'active' }
+  const wib = { name: 'claude-b.json', type: 'claude', prefix: 'wibond', email: 'grocca@wibond.test', priority: 1, status: 'active' }
+  const priv = { name: 'claude-c.json', type: 'claude', prefix: 'priv8', email: 'p@example.com', priority: 500, disabled: true, status: 'disabled' }
+  const ag = { name: 'antigravity-a.json', type: 'antigravity', prefix: 'ag', email: 'x@example.com', priority: 900, status: 'active' }
+  const files = [ag, priv, wib, gon]
+  expect(cpamAutoAcct(files, 'claude-opus-5-5')).toEqual({ prefix: 'gon', email: 'gonn.nicolas@example.com' })
+  expect(cpamAutoAcct(files, 'claude-fable-5-2[1m]')?.prefix).toBe('gon')
+  // Otro proveedor sin prefijo, o sin cuentas vivas: no se infiere nada.
+  expect(cpamAutoAcct(files, 'glm-5')).toBeUndefined()
+  expect(cpamAutoAcct([priv, ag], 'claude-opus-5-5')).toBeUndefined()
+  // La de mayor priority no tiene el modelo, está no disponible o en cooldown: sigue la próxima.
+  expect(cpamAutoAcct(files, 'claude-opus-5-5', { 'claude-a.json': ['claude-sonnet-5'], 'claude-b.json': ['claude-opus-5-5'] })?.prefix).toBe('wibond')
+  expect(cpamAutoAcct([wib, { ...gon, unavailable: true }], 'claude-opus-5-5')?.prefix).toBe('wibond')
+  const at = Date.parse('2026-11-22T12:00:00Z')
+  expect(cpamAutoAcct([wib, { ...gon, cooldowns: [{ model: 'claude-opus-5-5', cooldown_until: '2026-11-22T13:00:00Z' }] }], 'claude-opus-5-5', {}, at)?.prefix).toBe('wibond')
+  expect(cpamAutoAcct([wib, { ...gon, cooldowns: [{ model: 'claude-opus-5-5', cooldown_until: '2026-11-22T11:00:00Z' }] }], 'claude-opus-5-5', {}, at)?.prefix).toBe('gon')
+  expect(cpamAutoAcct([wib, { ...gon, cooldowns: [{ model: 'claude-sonnet-5' }] }], 'claude-opus-5-5', {}, at)?.prefix).toBe('gon')
+  // En la banda va con → (inferida); con prefijo en el modelo manda el prefijo.
+  const base = { cpam: true, configDir: '', home: '/h', emails: { gon: 'gonn.nicolas@example.com' } }
+  expect(acctBadge({ ...base, model: 'claude-opus-5-5', auto: { prefix: 'gon', email: 'gonn.nicolas@example.com' } })).toEqual({ who: '→gon·gonn.nicolas', tag: 'CPAM', warn: false })
+  expect(acctBadge({ ...base, model: 'claude-opus-5-5', auto: { prefix: 'wibond', email: 'grocca@wibond.test' } })).toEqual({ who: '→wibond·grocca', tag: 'CPAM', warn: true })
+  expect(acctBadge({ ...base, model: 'claude-opus-5-5', auto: { prefix: '', email: 'solo@example.com' } }).who).toBe('→solo')
+  expect(acctBadge({ ...base, model: 'gon/claude-opus-5-5', auto: { prefix: 'wibond', email: 'grocca@wibond.test' } }).who).toBe('gon·gonn.nicolas')
+})
+
+test('línea bajo el prompt: por el CPAM sin prefijo muestra la cuenta inferida, consulta el management sin key en argv y cachea 30 s', async ($, on) => {
+  on('ui.render', { component: 'PromptHint' }, (_$: any, e: any) => _$.ui.resolve(e).Text({ children: [String(e.props.hint)] }))
+  mock.env(on, { HOME: '/h', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' })
+  mock.store(on)
+  on('fs.read', async () => ({ value: '' }))
+  on('session.model', async () => ({ value: 'claude-opus-5-5' }))
+  on('session.cwd', async () => ({ value: '/h' }))
+  const files = [
+    { name: 'claude-a.json', type: 'claude', prefix: 'gon', email: 'gonn.nicolas@example.com', priority: 100, status: 'active' },
+    { name: 'claude-b.json', type: 'claude', prefix: 'wibond', email: 'grocca@wibond.test', priority: 1, status: 'active' },
+  ]
+  const mgmt: string[][] = []
+  on('process.run', async (_$: any, e: any) => {
+    const a = e.argv as string[]
+    if (a[0] === 'sh' && String(a[2]).includes('mg auth-files')) return mgmt.push(a), { value: { exitCode: 0, stdout: JSON.stringify({ files }), stderr: '' } }
+    if (a[0] === 'sh' && String(a[2]).includes('auth-files/models')) return mgmt.push(a), { value: { exitCode: 0, stdout: a.slice(4).map(() => JSON.stringify({ models: [{ id: 'claude-opus-5-5' }] })).join('\n') + '\n', stderr: '' } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/h', surface: null, isInteractive: false })
+  const m: any = await ($ as any).ui.mount({ plugin: 'nerv', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '?' } })
+  await m.drawn()
+  await new Promise((r) => setTimeout(r, 50))
+  const text = JSON.stringify(await m.drawn())
+  expect(text).toContain('→gon·gonn.nicolas')
+  expect(text).toContain('CPAM')
+  expect(text).toContain('OPUS 5.5')
+  expect(mgmt.length).toBe(2)
+  expect(mgmt[1]!.slice(4)).toEqual(['claude-a.json', 'claude-b.json'])
+  for (const a of mgmt) expect(a.join(' ')).not.toMatch(/Bearer [^%]/)
+  await m.drawn()
+  expect(mgmt.length).toBe(2)
 })
 
 test('línea bajo el prompt: ventana de contexto, barra y umbrales', () => {
