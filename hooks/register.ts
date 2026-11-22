@@ -4181,10 +4181,15 @@ export const transcriptPath = (base: string, cwd: string, sid: string) => `${bas
 // ── Línea NERV bajo el prompt: cuenta, modelo, contexto y datos de un vistazo ──
 // Cuenta de la sesión. Por el CPAM: el prefijo del modelo (gon/, wibond/, ds/, ag3/…) y su
 // email (de los json de auth del CPAM). Directa: el config dir de Claude Code (personal = ~/.claude).
-export const acctBadge = (o: { model: string; cpam: boolean; configDir: string; home: string; emails: Record<string, string>; directEmail?: string }) => {
+// Sin prefijo, `auto` es la cuenta que elegiría el CPAM (inferida, por eso va con →).
+export const acctBadge = (o: { model: string; cpam: boolean; configDir: string; home: string; emails: Record<string, string>; directEmail?: string; auto?: { prefix: string; email: string } }) => {
   const local = (m?: string) => clip(String(m || '').split('@')[0], 14)
   if (o.cpam) {
     const prefix = /^([\w.-]+)\//.exec(o.model || '')?.[1] || ''
+    if (!prefix && o.auto) {
+      const who = '→' + [o.auto.prefix, local(o.auto.email)].filter(Boolean).join('·')
+      return { who, tag: 'CPAM' as const, warn: /wibond/i.test(o.auto.prefix + ' ' + o.auto.email) }
+    }
     const email = prefix ? o.emails[prefix] || '' : ''
     const who = prefix ? (email ? `${prefix}·${local(email)}` : prefix) : 'default'
     return { who, tag: 'CPAM' as const, warn: /wibond/i.test(prefix + ' ' + email) }
@@ -4254,7 +4259,7 @@ let cpamCtx: Record<string, number> = {}
 
 // Los segmentos de la línea bajo el prompt, en orden; `prio` alto = se queda en terminales angostas.
 const statusSegs = (): StatusSeg[] => {
-  const a = acctBadge({ model, cpam: mdlCpam, configDir, home, emails: mdl.emails, directEmail })
+  const a = acctBadge({ model, cpam: mdlCpam, configDir, home, emails: mdl.emails, directEmail, auto: cpamAutoAcct(cpamAuto.files, model, cpamModelIds()) })
   const ctx = ctxGauge(usage?.context?.tokens, ctxTotal({ env: ctxEnv, window: usage?.context?.window, cpam: cpamCtx[model] }))
   const hue = ctx.level === 'hot' ? C.red : ctx.level === 'warn' ? C.amber : ctx.level === 'ok' ? C.lime : C.dim
   const segs: StatusSeg[] = [
@@ -4276,6 +4281,62 @@ const statusSegs = (): StatusSeg[] => {
 // Firma de las cuentas del CPAM: json de auth + su prefix, y mtime/size del config.yaml (nunca tokens).
 export const cpamSig = (auth: readonly { name: string; prefix?: string }[], conf?: { mtimeMs?: number; size?: number }) =>
   auth.map((a) => `${a.name}=${a.prefix || ''}`).sort().join(',') + `|${conf?.mtimeMs ?? 0}:${conf?.size ?? 0}`
+
+// Cuenta claude del CPAM que puede atender ahora: habilitada, disponible y sin cooldown vigente
+// para `base` (un cooldown sin modelo cubre a todos; sin fecha, se toma como vigente).
+const cpamLive = (f: any, base: string, at: number) =>
+  (f?.type || f?.provider) === 'claude' && !f.disabled && f.status !== 'disabled' && !f.unavailable &&
+  !(Array.isArray(f.cooldowns) ? f.cooldowns : []).some((c: any) => {
+    if (c?.model && c.model !== base) return false
+    const until = Date.parse(String(c?.cooldown_until || c?.next_retry_after || ''))
+    return Number.isNaN(until) || until > at
+  })
+// Con un modelo Claude sin prefijo el CPAM (fill-first) usa la cuenta claude viva de mayor priority
+// que tenga el modelo (`models`: ids por json de auth; sin dato no se descarta). Qué cuenta ligó
+// session-affinity a la sesión su API no lo expone: esto es la inferencia.
+export const cpamAutoAcct = (files: readonly any[], model: string, models: Record<string, readonly string[]> = {}, at = Date.now()) => {
+  const base = String(model || '').replace(/\[.*\]$/, '')
+  if (!/^claude-/.test(base)) return undefined
+  const f = files
+    .filter((f) => cpamLive(f, base, at) && (!models[f.name] || models[f.name]!.includes(base)))
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0))[0]
+  return f ? { prefix: String(f.prefix || ''), email: String(f.email || f.account || '') } : undefined
+}
+
+// auth-files del management del CPAM (≤ 1 consulta cada 30 s) + modelos de cada cuenta claude
+// (cada 5 min). La management key se lee adentro del sh y va a curl por stdin: no queda en ps ni en pantalla.
+let cpamAuto: { at: number; busy: boolean; files: any[]; models: Record<string, { ids: string[]; at: number }> } = { at: 0, busy: false, files: [], models: {} }
+const CPAM_MGMT = `K=$(sed -n 's/^management-key=//p' "$HOME/.cli-proxy-api/keys.txt"); mg() { printf 'Authorization: Bearer %s\\n' "$K" | curl -s -m 4 -H @- "${CPAM_URL}/v0/management/$1"; }`
+async function refreshCpamAuto($: any) {
+  if (!mdlCpam || !home || cpamAuto.busy || now() - cpamAuto.at < 30000 || /^[\w.-]+\//.test(model)) return
+  cpamAuto.busy = true
+  cpamAuto.at = now()
+  try {
+    const before = JSON.stringify(cpamAutoAcct(cpamAuto.files, model, cpamModelIds()))
+    const r = await $.process.run(['sh', '-c', `${CPAM_MGMT}; mg auth-files`], { timeoutMs: 6000 }).catch(() => undefined)
+    const files = r?.exitCode === 0 ? JSON.parse(r.stdout || '{}')?.files : undefined
+    if (!Array.isArray(files)) return
+    const stale = files.filter((f: any) => cpamLive(f, '', now()) && f.name && now() - (cpamAuto.models[f.name]?.at || 0) > 300000).map((f: any) => String(f.name))
+    if (stale.length) {
+      const m = await $.process
+        .run(['sh', '-c', `${CPAM_MGMT}; for n; do mg "auth-files/models?name=$n" | tr -d '\\n'; echo; done`, 'sh', ...stale], { timeoutMs: 10000 })
+        .catch(() => undefined)
+      const lines = m?.exitCode === 0 ? String(m.stdout || '').split('\n') : []
+      stale.forEach((name: string, i: number) => {
+        try {
+          const ids = ((JSON.parse(lines[i] || '')?.models || []) as any[]).map((x) => String(x?.id || '')).filter(Boolean)
+          cpamAuto.models[name] = { ids, at: now() }
+        } catch {}
+      })
+    }
+    cpamAuto.files = files
+    if (JSON.stringify(cpamAutoAcct(cpamAuto.files, model, cpamModelIds())) !== before) $.ui.invalidate('ui.render')
+  } catch {
+  } finally {
+    cpamAuto.busy = false
+  }
+}
+const cpamModelIds = () => Object.fromEntries(Object.entries(cpamAuto.models).map(([k, v]) => [k, v.ids]))
 
 async function cpamScan($: any) {
   const dir = `${home}/.cli-proxy-api`
@@ -5637,6 +5698,7 @@ export function register(on: any) {
     if (quiet || e.surface !== 'terminal') return rest
     try {
       const { Box, Text } = $.ui.resolve(e)
+      void refreshCpamAuto($)
       const kept = fitSegs(statusSegs(), Math.max(10, (e.viewport?.columns || 100) - 2))
       const parts: any[] = []
       kept.forEach((sg, i) => {
